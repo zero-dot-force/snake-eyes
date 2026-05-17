@@ -54,6 +54,11 @@ You are updating the project constitution at `.specify/memory/constitution.md`. 
 
 **Note**: If `.specify/memory/constitution.md` does not exist yet, it should have been initialized from `.specify/templates/constitution-template.md` during project setup. If it's missing, copy the template first.
 
+**UF Context Retrieval**: Before updating the constitution, query Dewey for relevant context:
+- Use `dewey_semantic_search` with "constitution principles" to find how other projects in the organization define their constitutions
+- Use `dewey_search` for convention pack references that may inform constitutional principles
+- If Dewey is unavailable, proceed with direct file reads of local convention packs
+
 Follow this execution flow:
 
 1. Load the existing constitution at `.specify/memory/constitution.md`.
@@ -148,3 +153,18 @@ Check if `.specify/extensions.yml` exists in the project root.
     EXECUTE_COMMAND: {command}
     ```
 - If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently
+
+
+## Guardrails
+
+- **NEVER modify source code** — this command updates
+  spec artifacts ONLY. Implementation changes belong in
+  `/speckit.implement`, `/unleash`, or `/cobalt-crush`.
+- **NEVER modify test files, Go source, Markdown agents,
+  convention packs, or config files** outside the
+  `specs/NNN-*/` feature directory.
+- The ONLY files this command may write are:
+  - `FEATURE_SPEC` (the spec.md file)
+  - Files within `FEATURE_DIR` (spec artifacts:
+    plan.md, tasks.md, research.md, data-model.md,
+    quickstart.md, contracts/, checklists/)

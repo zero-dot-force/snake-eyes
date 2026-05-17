@@ -1,17 +1,10 @@
 ---
-name: openspec-apply-change
-description: Implement tasks from an OpenSpec change. Use when the user wants to start implementing, continue implementation, or work through tasks.
-license: MIT
-compatibility: Requires openspec CLI.
-metadata:
-  author: openspec
-  version: "1.0"
-  generatedBy: "1.3.1"
+description: Implement tasks from an OpenSpec change (Experimental)
 ---
 
 Implement tasks from an OpenSpec change.
 
-**Input**: Optionally specify a change name. If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
+**Input**: Optionally specify a change name (e.g., `/opsx-apply add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
 **Steps**
 
@@ -50,28 +43,6 @@ Implement tasks from an OpenSpec change.
    If Dewey is unavailable, proceed with direct file reads of
    convention packs and local code examples.
 
-   **Dewey Availability Tiers**
-
-   Adjust context retrieval based on Dewey availability:
-
-   **Tier 3 (Full Dewey)**: Use `dewey_semantic_search`,
-   `dewey_search`, `dewey_traverse`, and
-   `dewey_semantic_search_filtered` for comprehensive cross-repo
-   and toolstack context.
-
-   **Tier 2 (Graph-only, no embedding model)**: Use
-   `dewey_search` and `dewey_traverse` for keyword-based and
-   structural queries. Semantic search is unavailable.
-
-   **Tier 1 (No Dewey)**: Fall back to direct file operations:
-   - Use the Read tool to read local specs, backlog items, and
-     convention packs
-   - Use the Grep tool for keyword search across the codebase
-   - Reference `.opencode/uf/packs/` for coding standards
-
-   All tiers produce valid results. Higher tiers provide richer
-   cross-repo context but are never required.
-
 2. **Check status to understand the schema**
    ```bash
    openspec status --change "<name>" --json
@@ -87,13 +58,13 @@ Implement tasks from an OpenSpec change.
    ```
 
    This returns:
-   - `contextFiles`: artifact ID -> array of concrete file paths (varies by schema - could be proposal/specs/design/tasks or spec/tests/implementation/docs)
+   - `contextFiles`: artifact ID -> array of concrete file paths (varies by schema)
    - Progress (total, complete, remaining)
    - Task list with status
    - Dynamic instruction based on current state
 
    **Handle states:**
-   - If `state: "blocked"` (missing artifacts): show message, suggest using openspec-continue-change
+   - If `state: "blocked"` (missing artifacts): show message, suggest using `/opsx-continue`
    - If `state: "all_done"`: congratulate, suggest archive
    - Otherwise: proceed to implementation
 
@@ -163,7 +134,7 @@ Working on task 4/7: <task description>
 - [x] Task 2
 ...
 
-All tasks complete! Ready to archive this change.
+All tasks complete! You can archive this change with `/opsx-archive`.
 ```
 
 **Output On Pause (Issue Encountered)**

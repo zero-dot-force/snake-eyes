@@ -48,6 +48,14 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 1. Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
+1b. **Retrieve implementation context from Dewey**: Before implementing, query Dewey for relevant patterns:
+   - Use `dewey_semantic_search` with the task descriptions to find similar implementations in other repos
+   - Use `dewey_semantic_search_filtered` with `source_type: "web"` to find relevant toolstack documentation
+   - Use `dewey_search` for convention pack references related to the implementation domain
+   - If Dewey is unavailable, proceed with direct file reads of convention packs and local code examples
+
+1c. **Review Council Gate**: After completing all tasks, run `/review-council` and receive APPROVE from all four Divisor reviewers (Adversary, Architect, Guard, Tester) before declaring implementation complete. Any REQUEST CHANGES findings MUST be resolved before the implementation is considered done.
+
 2. **Check checklists status** (if FEATURE_DIR/checklists/ exists):
    - Scan all checklist files in the checklists/ directory
    - For each checklist, count:
@@ -197,3 +205,18 @@ Note: This command assumes a complete task breakdown exists in tasks.md. If task
         EXECUTE_COMMAND: {command}
         ```
     - If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently
+
+
+## Guardrails
+
+- **NEVER modify source code** — this command updates
+  spec artifacts ONLY. Implementation changes belong in
+  `/speckit.implement`, `/unleash`, or `/cobalt-crush`.
+- **NEVER modify test files, Go source, Markdown agents,
+  convention packs, or config files** outside the
+  `specs/NNN-*/` feature directory.
+- The ONLY files this command may write are:
+  - `FEATURE_SPEC` (the spec.md file)
+  - Files within `FEATURE_DIR` (spec artifacts:
+    plan.md, tasks.md, research.md, data-model.md,
+    quickstart.md, contracts/, checklists/)

@@ -1,12 +1,5 @@
 ---
-name: openspec-propose
-description: Propose a new change with all artifacts generated in one step. Use when the user wants to quickly describe what they want to build and get a complete proposal with design, specs, and tasks ready for implementation.
-license: MIT
-compatibility: Requires openspec CLI.
-metadata:
-  author: openspec
-  version: "1.0"
-  generatedBy: "1.3.1"
+description: Propose a new change - create it and generate all artifacts in one step
 ---
 
 Propose a new change - create the change and generate all artifacts in one step.
@@ -20,11 +13,11 @@ When ready to implement, run /opsx-apply
 
 ---
 
-**Input**: The user's request should include a change name (kebab-case) OR a description of what they want to build.
+**Input**: The argument after `/opsx-propose` is the change name (kebab-case), OR a description of what the user wants to build.
 
 **Steps**
 
-1. **If no clear input provided, ask what they want to build**
+1. **If no input provided, ask what they want to build**
 
    Use the **AskUserQuestion tool** (open-ended, no preset options) to ask:
    > "What change do you want to work on? Describe what you want to build or fix."
@@ -67,28 +60,6 @@ When ready to implement, run /opsx-apply
 
    If Dewey is unavailable, proceed without cross-repo context --
    use direct file reads of local specs and backlog items instead.
-
-   **Dewey Availability Tiers**
-
-   Adjust context retrieval based on Dewey availability:
-
-   **Tier 3 (Full Dewey)**: Use `dewey_semantic_search`,
-   `dewey_search`, `dewey_traverse`, and
-   `dewey_semantic_search_filtered` for comprehensive cross-repo
-   and toolstack context.
-
-   **Tier 2 (Graph-only, no embedding model)**: Use
-   `dewey_search` and `dewey_traverse` for keyword-based and
-   structural queries. Semantic search is unavailable.
-
-   **Tier 1 (No Dewey)**: Fall back to direct file operations:
-   - Use the Read tool to read local specs, backlog items, and
-     convention packs
-   - Use the Grep tool for keyword search across the codebase
-   - Reference `.opencode/uf/packs/` for coding standards
-
-   All tiers produce valid results. Higher tiers provide richer
-   cross-repo context but are never required.
 
 3. **Get the artifact build order**
    ```bash
@@ -141,7 +112,7 @@ After completing all artifacts, summarize:
 - Change name and location
 - List of artifacts created with brief descriptions
 - What's ready: "All artifacts created! Ready for implementation."
-- Prompt: "Run `/opsx-apply` or ask me to implement to start working on the tasks."
+- Prompt: "Run `/opsx-apply` to start implementing."
 
 **Artifact Creation Guidelines**
 
@@ -159,3 +130,15 @@ After completing all artifacts, summarize:
 - If context is critically unclear, ask the user - but prefer making reasonable decisions to keep momentum
 - If a change with that name already exists, ask if user wants to continue it or create a new one
 - Verify each artifact file exists after writing before proceeding to next
+
+## Guardrails
+
+- **NEVER implement code changes** — this command
+  creates artifacts ONLY (proposal, design, specs,
+  tasks)
+- **NEVER commit, push, or create PRs** — those are
+  /finale's responsibility
+- **NEVER run /unleash, /opsx-apply, or /cobalt-crush**
+  — the user decides when to implement
+- After artifacts are complete, STOP and prompt the
+  user to run /unleash, /opsx-apply, or /cobalt-crush
