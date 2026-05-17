@@ -1,0 +1,10 @@
+# Knowledge store configuration
+# Each store curates knowledge from indexed sources.
+# Uncomment and customize the example below.
+
+# stores:
+#   - name: team-decisions
+#     sources: [disk-local]
+#     # path: .uf/dewey/knowledge/team-decisions  # default
+#     # curate_on_index: false                     # default
+#     # curation_interval: 10m                     # default

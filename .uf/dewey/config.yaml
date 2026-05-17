@@ -1,0 +1,6 @@
+# Dewey configuration
+# See: https://github.com/unbound-force/dewey
+
+embedding:
+  model: granite-embedding:30m
+  endpoint: http://localhost:11434
