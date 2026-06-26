@@ -1,0 +1,4 @@
+_extends: .github
+
+repository:
+  description: "Python analyzer for Gaze -- test quality analysis via side effect detection"
