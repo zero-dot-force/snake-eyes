@@ -1,0 +1,40 @@
+[project]
+name = "snake-eyes"
+version = "0.1.0"
+description = "Python side-effect analyzer backend for Gaze (JSON-RPC 2.0 external analyzer protocol)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = []
+
+[project.scripts]
+snake-eyes = "snake_eyes.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "mypy",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/snake_eyes"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=snake_eyes --cov-report=term-missing --cov-fail-under=85"
