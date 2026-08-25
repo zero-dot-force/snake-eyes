@@ -7,6 +7,7 @@ agent: gaze-reporter
 ---
 <!-- scaffolded by gaze dev -->
 
+<protect>
 # Command: /gaze
 
 ## Description
@@ -47,3 +48,4 @@ formatting.
 
 If no arguments are provided, the agent defaults to full mode with
 the package pattern `./...`.
+</protect>

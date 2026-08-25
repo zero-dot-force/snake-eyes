@@ -3,12 +3,11 @@ description: >
   Create, validate, and improve AGENTS.md -- the project briefing
   for AI coding agents. Auto-detects mode: creates from scratch
   when no AGENTS.md exists, audits and suggests improvements when
-  one is present. Also ensures cross-tool bridge files (CLAUDE.md,
-  .cursorrules) are properly configured.
+  one is present.
 ---
 <!-- scaffolded by uf vdev -->
 
-# Command: /agent-brief
+# Command: /uf.agent-brief
 
 ## Description
 
@@ -23,8 +22,8 @@ a good AGENTS.md, every agent session starts from cold context.
 **Modes**:
 - No AGENTS.md → **Create mode** (analyze project, generate file)
 - AGENTS.md exists → **Audit mode** (score, report, suggest)
-- `/agent-brief create` → Force create mode (overwrite)
-- `/agent-brief audit` → Force audit mode (read-only)
+- `/uf.agent-brief create` → Force create mode (overwrite)
+- `/uf.agent-brief audit` → Force audit mode (read-only)
 
 ## Instructions
 
@@ -169,7 +168,7 @@ These rules are non-negotiable. Violations are CRITICAL severity.
   Review: fixes only. Violation = process error, stop immediately.
 - **CI parity**: MUST replicate CI checks locally before marking
   tasks complete. Derive commands from `.github/workflows/`.
-- **Review council**: MUST run `/review-council` before PR
+- **Review council**: MUST run `/uf.review-council` before PR
   submission. Resolve all REQUEST CHANGES. No code changes
   between APPROVE and PR. Exempt: constitution amendments,
   docs-only, emergency hotfixes.
@@ -180,9 +179,10 @@ These rules are non-negotiable. Violations are CRITICAL severity.
   entries, `AGENTS.md` for structural updates (project
   structure, conventions, build commands), `README.md` for
   description changes.
-- **Website gate**: MUST file `unbound-force/website` issue
-  for user-facing changes before PR merge. Exempt: internal
-  refactoring, test-only, CI-only, spec artifacts.
+- **Documentation gate**: MUST file a documentation issue
+  against the current repo for user-facing changes before
+  PR merge. Exempt: internal refactoring, test-only,
+  CI-only, spec artifacts.
 - **Zero-waste**: No orphaned specs, unused standards, or
   aspirational documents that do not map to actionable work.
 
@@ -190,8 +190,8 @@ These rules are non-negotiable. Violations are CRITICAL severity.
 
 | Command | When | Scope |
 |---------|------|-------|
-| `/review-council` | Pre-PR (local) | 5+ Divisor agents |
-| `/review-pr [N]` | Post-PR (GitHub) | Single agent, CI analysis |
+| `/uf.review-council` | Pre-PR (local) | 5+ Divisor agents |
+| `/uf.review-pr [N]` | Post-PR (GitHub) | Single agent, CI analysis |
 ```
 
 #### Section 7: Specification Workflow (verbatim template, conditional)
@@ -314,7 +314,7 @@ by the Scribe and `update-agent-context.sh`.
    suggest changes first."
 3. On confirmation, write the file to `AGENTS.md` at repo root.
 4. If CHANGELOG.md was created, mention it in the summary.
-5. Proceed to Step 5 (Bridge Files).
+5. Proceed to Step 5 (Summary Report).
 
 ### Step 4: Audit Mode
 
@@ -405,7 +405,7 @@ Packs) and 10 (Architecture) are recommended.
 Produce a structured report:
 
 ```
-## /agent-brief: Audit Report
+## /uf.agent-brief: Audit Report
 
 ### Section Coverage
 
@@ -436,8 +436,7 @@ Structure sections, or "No staleness detected."]
 | Conditional sections | N/N | ✅/⚠ |
 | Build code blocks | N | ✅/⚠ |
 | Governance rules | N/8 | ✅/⚠ |
-| Bridge: CLAUDE.md | present/missing | ✅/⚠ |
-| Bridge: .cursorrules | present/missing | ✅/⚠ |
+
 
 ### Improvement Suggestions
 
@@ -457,50 +456,17 @@ If improvements were suggested:
    - Do NOT modify existing project-specific sections
 3. After applying, re-run the audit to show updated score.
 
-### Step 5: Bridge File Verification
-
-After creating or improving AGENTS.md, verify cross-tool bridge
-files exist. Bridge file creation is owned by `uf init`
-(`ensureCLAUDEmd()` and `ensureCursorrules()`). This command
-only checks their status and suggests running `uf init` if
-they are missing or misconfigured.
-
-**CLAUDE.md**:
-1. Check if CLAUDE.md exists at repo root.
-2. If it exists, check if it contains `@AGENTS.md`.
-3. If missing or lacking the import:
-   - Report: `"⚠ CLAUDE.md: missing or does not import AGENTS.md"`
-   - Suggest: `"Run: uf init to create bridge files"`
-4. If already configured:
-   - Report: `"⊘ CLAUDE.md: already imports AGENTS.md"`
-
-**.cursorrules**:
-1. Check if .cursorrules exists at repo root.
-2. If it exists, check if it references AGENTS.md.
-3. If missing or lacking the reference:
-   - Report: `"⚠ .cursorrules: missing or does not reference AGENTS.md"`
-   - Suggest: `"Run: uf init to create bridge files"`
-4. If already configured:
-   - Report: `"⊘ .cursorrules: already references AGENTS.md"`
-
-**Note**: `uf init` is the canonical owner of bridge file
-creation. It generates CLAUDE.md with `@AGENTS.md` plus
-convention pack `@` imports, and .cursorrules with AGENTS.md
-reading instructions. Do NOT create bridge files with a
-different marker -- defer to `uf init`.
-
-### Step 6: Summary Report
+### Step 5: Summary Report
 
 Display a final summary:
 
 **Create mode**:
 ```
-## /agent-brief: Complete
+## /uf.agent-brief: Complete
 
 ### Created
   ✅ AGENTS.md: generated (N lines)
   ✅ CHANGELOG.md: created (if newly created)
-  [bridge file statuses]
 
 ### Next Steps
   Review the Architecture section and add project-specific
@@ -510,7 +476,7 @@ Display a final summary:
 
 **Audit mode**:
 ```
-## /agent-brief: Audit Complete
+## /uf.agent-brief: Audit Complete
 
 ### Score: [Label]
   [section coverage summary]
@@ -521,9 +487,8 @@ Display a final summary:
 
 ## Guardrails
 
-- **NEVER modify files outside AGENTS.md, CLAUDE.md,
-  .cursorrules, and CHANGELOG.md** -- this command manages
-  agent context files only.
+- **NEVER modify files outside AGENTS.md and CHANGELOG.md**
+  -- this command manages agent context files only.
 - **NEVER modify CHANGELOG.md content beyond initial
   creation** -- only create the file with a `# Changelog`
   heading if it does not exist. Do not add, edit, or remove

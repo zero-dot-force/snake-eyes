@@ -1,4 +1,5 @@
 ---
+name: replicator-cli
 description: Replicator CLI quick reference
 tags: [cli, reference, replicator]
 ---

@@ -72,19 +72,8 @@ Archive a completed change in the experimental workflow.
    - If no: Move the change directory to archive
 
    ```bash
-    mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>
-    ```
-
-5b. **Return to main branch**
-
-   After the archive move completes:
-   ```bash
-   git checkout main
+   mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>
    ```
-
-   The `opsx/<name>` branch still exists locally. Note in the
-   summary that the developer can delete it manually with
-   `git branch -d opsx/<name>` if desired.
 
 6. **Display summary**
 

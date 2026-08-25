@@ -1,4 +1,5 @@
 ---
+name: forge-coordination
 description: Multi-agent coordination patterns for forge sessions
 tags: [forge, coordination, multi-agent]
 ---
@@ -7,7 +8,13 @@ tags: [forge, coordination, multi-agent]
 
 Patterns for coordinating parallel agent work.
 
-## Coordinator Protocol
+## Coordinator-Only Operations
+
+- Coordinators MUST NOT reserve files
+- Coordinators MUST NOT edit files directly
+- Only coordinators MAY call `comms_release_all()` for emergency release of all reservations
+
+### Coordinator Protocol
 
 1. **Initialize**: `comms_init(project_path=".", task_description="...")`
 2. **Check learnings**: `hivemind_find(query="<task keywords>")`
@@ -20,23 +27,27 @@ Patterns for coordinating parallel agent work.
 9. **Complete**: `forge_complete(bead_id, summary, files_touched)`
 10. **Learn**: `hivemind_store(information="...", tags="forge,<topic>")`
 
-## Worker Protocol
+## Worker-Only Operations
+
+- Workers MUST reserve files before editing
+- Workers MUST use `exclusive=true` when reserving files
+- Workers MUST NOT call `comms_release_all()`
+- Workers MUST release files when done: `comms_release(paths=[...])`
+
+### Worker Protocol
 
 1. **Initialize**: `comms_init(project_path=".", task_description="...")`
 2. **Check learnings**: `hivemind_find(query="<task keywords>")`
-3. **Reserve files**: `comms_reserve(paths=[...], reason="...")`
-4. **Implement**: Make changes to reserved files
+3. **Reserve files**: `comms_reserve(paths=[...], exclusive=true, reason="...")`
+   If reservation fails:
+   a. Check who holds the reservation
+   b. Send a message via `comms_send` to negotiate release
+   c. Wait for release or escalate to coordinator
+4. **Implement**: Make changes to reserved files only
 5. **Report progress**: `forge_progress(bead_id, progress_percent, status)`
 6. **Store learnings**: `hivemind_store(information="...", tags="...")`
-7. **Complete**: `forge_complete(bead_id, summary, files_touched)`
-
-## File Reservation Rules
-
-- Workers MUST reserve files before editing
-- Coordinators NEVER reserve files
-- Use `comms_reserve(paths=[...], exclusive=true)` for exclusive access
-- Release files when done: `comms_release(paths=[...])`
-- Emergency release: `comms_release_all()` (coordinator only)
+7. **Release files**: `comms_release(paths=[...])`
+8. **Complete**: `forge_complete(bead_id, summary, files_touched)`
 
 ## Progress Reporting
 
@@ -52,10 +63,3 @@ forge_progress(
   message="Implemented core logic, starting tests"
 )
 ```
-
-## Conflict Resolution
-
-If a file reservation fails:
-1. Check who holds the reservation
-2. Send a message via `comms_send` to negotiate
-3. Wait for release or escalate to coordinator

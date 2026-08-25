@@ -1,11 +1,13 @@
 ---
-description: "Review a pull request for alignment, security, and constitution compliance"
+description: "Review PR #$ARGUMENTS — alignment, security, and constitution compliance"
 ---
 <!-- scaffolded by uf vdev -->
 
 # Review Pull Request
 
 You are a token-efficient code reviewer. The user will provide a PR number or you will auto-detect it from the current branch. Delegate deterministic checks to local tools and CI results first, then apply AI judgment only where tools cannot reach: intent alignment, security patterns, and architectural concerns.
+
+<protect>
 
 ## Arguments
 
@@ -59,13 +61,14 @@ running commands): **STOP** with message:
 > plan/read-only mode which prevents executing these
 > checks. Switch to a mode that allows command
 > execution (e.g., full mode / auto mode) and
-> re-invoke `/review-pr <N>`."
+> re-invoke `/uf.review-pr <N>`."
 
 Do NOT proceed with a partial review that skips local
 tool execution. The local tool results are the
 foundation of the review — without them, AI-only
 findings lack verification and the review does not
 meet the command's quality standard.
+
 
 ### 1. Resolve PR Number
 
@@ -82,7 +85,7 @@ gh pr view --json number --jq '.number'
 ```
 
 If no open PR exists for the current branch: **STOP** with error:
-> "No open PR found for branch '`<branch>`'. Provide a PR number: `/review-pr 42`"
+> "No open PR found for branch '`<branch>`'. Provide a PR number: `/uf.review-pr 42`"
 
 ### 2. Fetch PR Metadata (Minimal)
 
@@ -108,9 +111,12 @@ Categorize each check as:
 - **PENDING**: Check still running
 - **SKIPPED**: Check was skipped
 
-If checks are still PENDING, inform the user and ask whether to wait or proceed with the available results.
+If checks are still PENDING, inform the user and use
+the **question tool** with options
+`["Wait for checks to complete", "Proceed with
+available results"]`.
 
-**If all checks pass**: Record this and move to Step 4. No CI triage needed.
+**If all checks pass**: Record this and move to Step 3.5. No CI triage needed.
 
 **If any checks fail**: Proceed to Step 3a for causality determination.
 
@@ -138,67 +144,126 @@ gh api repos/{owner}/{repo}/commits/${BASE_BRANCH}/check-runs \
 | Fail | Fail | **Pre-existing** — failure exists independently of the PR |
 | No data | Fail | **Unknown** — treat as PR-caused (conservative) |
 
-Record the classification for each failing check. This feeds into Step 8 (AI review) and Step 10 (fix-branch).
+Record the classification for each failing check. This feeds into the AI review and fix-branch steps.
 
-### 4. Run Local Deterministic Tools (Pre-flight)
+### 3.5. Pre-delegation Diff Size Check
 
-Run the project's own tools as a rapid pre-flight check.
+Before delegating to the analysis subagent, check if the
+diff is large enough to warrant a file-focus prompt.
 
-**Detection**: Check which tools are available by looking
-for their configuration files:
+Using the `additions`, `deletions`, and `files` fields
+from Step 2 metadata:
 
-```bash
-test -f Makefile && echo "MAKEFILE=yes"
-test -f .golangci.yml && echo "GO_LINT=yes"
-test -f ruff.toml -o -f pyproject.toml && echo "PYTHON_LINT=yes"
-test -f .yamllint.yml && echo "YAML_LINT=yes"
-test -f .pre-commit-config.yaml && echo "PRECOMMIT=yes"
-```
+1. Calculate total diff lines: `additions + deletions`
+2. Count changed files: length of `files` array
 
-**CI coverage check** (mandatory before running any
-tool): Build and display a coverage matrix that maps
-each detected local tool to the CI check from Step 3
-that covers the same verification. Display this matrix
-to make the skip/run decision visible:
+**If total diff lines > 2000 OR changed files > 50**:
 
-| Local tool | CI check that covers it | CI status | Run locally? |
-|------------|------------------------|-----------|--------------|
-| `go test` | e.g., "Local CI / test" | PASS/FAIL/NONE | Yes/No |
-| `golangci-lint` | e.g., "CI Checks / lint" | PASS/FAIL/NONE | Yes/No |
-| ... | ... | ... | ... |
+Use the **question tool** with options
+`["Review all files", "Focus on specific files"]`.
 
-Decision rules:
-- CI status PASS → skip locally ("No" — CI already
-  verified)
-- CI status FAIL → skip locally ("No" — failure already
-  captured in Step 3a, will be analyzed in Step 8d)
-- CI status NONE (no matching check) → MUST run
-  locally ("Yes")
-- No CI checks reported at all → MUST run ALL detected
-  local tools ("Yes" for every row)
+If the user selects "Focus on specific files", follow up
+with the **question tool** (open-ended, no preset
+options) to ask which files or directories to focus on.
 
-**Execution**: Run only the tools marked "Yes" in the
-matrix above:
+Record the user's choice as `FILE_FOCUS_SCOPE`:
+- "all" if reviewing all files
+- A list of file paths/patterns if focusing on specific
+  files
 
-| Tool detected | Command to run | What it checks |
-|---------------|----------------|----------------|
-| Makefile | `make lint` (or `make check`) | Project-defined lint/format/vet |
-| `.golangci.yml` | `golangci-lint run ./...` | Go lint rules |
-| `ruff.toml` / `pyproject.toml` | `ruff check .` | Python lint rules |
-| `.yamllint.yml` | `yamllint .` | YAML lint rules |
-| `.pre-commit-config.yaml` | `pre-commit run --all-files` | Pre-commit hooks |
-| `go.mod` | `go test ./...` | Go tests |
-| `pyproject.toml` / `setup.py` | `pytest` or `python -m pytest` | Python tests |
+**If total diff lines <= 2000 AND changed files <= 50**:
+Set `FILE_FOCUS_SCOPE = "all"` silently.
 
-**Record results**: Capture tool exit codes and output.
-If tools pass, skip those categories in the AI review
-entirely. If tools fail, include the failure output as
-context.
+This check moves here from Step 5 because the subagent
+cannot interact with the user.
 
-**If no tools are detected**: Note this and proceed to
-AI-based review for all categories.
+### 4. Delegate Analysis to Subagent
 
-### 5. Fetch Diff (Scoped)
+Delegate the token-heavy analysis (Steps 4-8) to a Task
+subagent to keep the parent context small and resilient
+to context compression.
+
+Invoke the **Task tool** with:
+- `subagent_type`: `"general"`
+- `description`: `"PR #<PR_NUMBER> analysis"`
+- `prompt`: Construct the prompt below, injecting the PR
+  metadata values gathered in Steps 0-3.
+
+**Injected context** (substitute actual values):
+- `PR_NUMBER`: from Step 1
+- `PR_TITLE`: from Step 2
+- `PR_BODY`: from Step 2 (truncate to 2000 chars)
+- `BASE_BRANCH`: from Step 2
+- `HEAD_BRANCH`: from Step 2
+- `CHANGED_FILES`: from Step 2 (JSON array of file paths)
+- `CI_CHECK_RESULTS`: from Step 3 (JSON array of check
+  results with name, state, classification)
+- `FILE_FOCUS_SCOPE`: from Step 3.5
+
+**Wait** for the subagent to return its findings. The
+subagent returns a structured message containing all the
+sections listed below. Parse the returned message and
+proceed to Step 5 (Output Format).
+
+---
+
+#### BEGIN SUBAGENT PROMPT
+
+You are analyzing PR #<PR_NUMBER> ("<PR_TITLE>") for a
+code review. The parent agent has already completed
+prerequisites, metadata gathering, and CI check analysis.
+Your job is to run the analysis steps and return structured
+findings.
+
+**PR Metadata:**
+- PR: #<PR_NUMBER> — <PR_TITLE>
+- Base: <BASE_BRANCH> ← Head: <HEAD_BRANCH>
+- Changed files: <CHANGED_FILES>
+- File focus scope: <FILE_FOCUS_SCOPE>
+
+**CI Check Results:**
+<CI_CHECK_RESULTS>
+
+**PR Description:**
+<PR_BODY>
+
+Execute the following analysis steps in order, then return
+your findings in the structured format at the end.
+
+##### Step A. Run Local Deterministic Tools (Pre-flight)
+
+Load the `pre-flight` skill and run in `ci-aware` mode:
+
+1. Invoke the `skill` tool with name `pre-flight` to
+   load the shared pre-flight check instructions.
+
+2. Execute the pre-flight skill's phases in order:
+   a. CI Workflow Parsing — discover commands from
+      `.github/workflows/`
+   b. Local Tool Detection — check for config files
+      and verify binary availability
+   c. CI Coverage Matrix — build the matrix using the
+      CI check results provided above. Apply ci-aware
+      decision rules:
+      - CI PASS → skip locally (CI already verified)
+      - CI FAIL → skip locally (failure already
+        captured in CI check analysis)
+      - CI NONE → MUST run locally
+      - No CI checks at all → MUST run ALL detected
+        local tools
+   d. Execution — run only tools marked "Yes" in the
+      coverage matrix
+
+3. **Record results**: Use the pre-flight result format
+   (CI Coverage Matrix, Execution Results, Verdict).
+   If tools pass, skip those categories in the AI
+   review entirely. If tools fail, include the failure
+   output as context for the AI review step.
+
+4. **If no tools are detected**: Note this and proceed
+   to AI-based review for all categories.
+
+##### Step B. Fetch Diff (Scoped)
 
 Now fetch the diff, being token-conscious:
 
@@ -234,9 +299,11 @@ navigate it with targeted reads:
    - Binary files
    - CRAP baselines: `.gaze/baseline.json`
 
-4. For very large PRs (2000+ lines or 50+ files),
-   warn the user and ask whether to review all files
-   or focus on specific ones.
+4. Use FILE_FOCUS_SCOPE from the parent context to
+   determine which files to analyze. If
+   FILE_FOCUS_SCOPE is "all", analyze all files. If it
+   contains specific file paths/patterns, focus
+   analysis on those files only.
 
 **Do NOT attempt**:
 - `gh pr diff <N> -- <path>` (unsupported, will fail)
@@ -245,7 +312,7 @@ navigate it with targeted reads:
 - `git fetch <remote> <branch>` (PR may come from a
   fork or push directly to PR refs)
 
-#### Accessing full file contents from the PR branch
+###### Accessing full file contents from the PR branch
 
 If you need to read a complete file from the PR branch
 (not just the diff), use the GitHub API. The PR branch
@@ -256,7 +323,7 @@ gh api repos/{owner}/{repo}/contents/<path>?ref=<headRefName> \
   --jq '.content' | base64 -d
 ```
 
-Use `<headRefName>` from the Step 2 metadata. If the
+Use `<headRefName>` from the PR metadata. If the
 API call returns 404, 403, or empty content (files
 >1 MB), fall back to reading from the saved diff file
 and note in the review that full file content was
@@ -268,73 +335,38 @@ targeting the PR's head ref (`git show`, `git fetch`,
 `git checkout`, `git diff` with remote refs) is
 prohibited.
 
-### 6. Locate Associated Specification
+##### Step C. Discover Review Context
 
-Search for a specification that matches this PR across all spec directories:
+Load the `review-context` skill for spec artifact
+discovery, issue linking, path classification, and
+walkthrough generation:
 
-- Check if the PR branch name matches a spec directory:
-  - `specs/<branch-name>/spec.md` (Speckit output)
-  - `openspec/specs/<branch-name>/spec.md` (OpenSpec specs)
-  - `openspec/changes/<branch-name>/proposal.md` (OpenSpec changes)
-- Check if the PR description references a spec
-- If not found locally, check the PR's changed file
-  list (from Step 2 metadata) for spec artifacts. The
-  spec may be introduced by the PR itself. If found
-  in the changed file list, read the spec content from
-  the saved diff (Step 5) rather than from the
-  filesystem.
-- If a Speckit spec is found, read only the **Functional Requirements** and **User Stories** sections (not the entire spec) to minimize token usage
-- If an OpenSpec proposal is found, read only the **Capabilities** and **Impact** sections
-- If no spec is found in any directory or in the PR's changed files, note this and use the PR title and description as the intent source
+1. Invoke the `skill` tool with name `review-context`
+   to load the shared context discovery instructions.
 
-#### 6a. Resolve Linked Issues
+2. Execute the skill's protocols in order:
+   a. Protocol 1 (Spec Artifact Discovery) — locate
+      the specification matching this PR using branch
+      name from the PR metadata, PR description, and
+      changed file list. If a spec is found in the
+      changed file list, read from the saved diff
+      (Step B) rather than the filesystem.
+   b. Protocol 2 (Issue Linking) — parse the PR body
+      from the PR metadata for linked issues, validate,
+      fetch, sanitize, and extract acceptance criteria.
+   c. Protocol 3 (Path-Based Focus Heuristics) —
+      classify each changed file from the PR metadata
+      for review emphasis.
+   d. Protocol 4 (Walkthrough Generation) — generate
+      per-file change summaries while analyzing the
+      diff from Step B.
 
-Parse the PR body (from Step 2 metadata) for issue
-references using case-insensitive regex:
-- `Fixes #N`, `Closes #N`, `Resolves #N`
-- GitHub URL variants:
-  `Fixes https://github.com/<owner>/<repo>/issues/N`
+3. **Record results**: Use the skill's Review Context
+   output format (Specification, Linked Issues, File
+   Classification, Walkthrough). This context is used
+   in the AI review step and the output.
 
-**Validation and limits**:
-- Validate each parsed issue number as a positive
-  integer (digits only). Discard non-numeric values.
-- URL-format references: validate they belong to the
-  same `{owner}/{repo}` as the PR. List cross-repo
-  references in the output as "cross-repo — not
-  validated" but do NOT fetch them.
-- Limit to 5 linked issues maximum. If more than 5
-  are found, list extras as "listed but not fetched"
-  in the output.
-
-**Fetching**: For each in-scope linked issue:
-
-```bash
-gh issue view <N> --json title,body,labels
-```
-
-**Untrusted input handling**: Issue body content is
-user-controlled. Before incorporating into the review
-context:
-- Truncate to a maximum of 2000 characters.
-
-**Error handling**: If `gh issue view` returns 404,
-403, or times out, log the error, skip that issue, and
-note in the `### Linked Issues` section as "fetch
-failed". The review continues without blocking.
-
-**Acceptance criteria extraction**: From each fetched
-issue body, extract:
-- Checkbox lines (`- [ ]` or `- [x]`)
-- Content under an `## Acceptance Criteria` heading
-
-If neither exists, use the issue title and body as
-general intent context for the alignment check
-(Step 8a).
-
-Record the linked issues and their acceptance criteria
-for use in Step 8a and Step 9.
-
-### 7. Load Convention Packs (Optional)
+##### Step D. Load Convention Packs (Optional)
 
 Check if convention packs are available for enhanced review precision:
 
@@ -348,19 +380,19 @@ test -d .opencode/uf/packs && echo "PACKS=yes"
    - `go.mod` exists → read `.opencode/uf/packs/go.md`
    - `tsconfig.json` or `package.json` exists → read `.opencode/uf/packs/typescript.md`
 3. Read corresponding `-custom.md` files if they exist (e.g., `go-custom.md`)
-4. Read `.opencode/uf/packs/severity.md` if it exists — use its severity definitions instead of the inline fallback in Step 8
+4. Read `.opencode/uf/packs/severity.md` if it exists — use its severity definitions instead of the inline fallback in the AI review step
 5. Do NOT load `content.md` or `content-custom.md` — these contain writing standards for documentation agents, not code quality rules
 
 Use pack rules (CS-001, AP-001, SC-001, TC-001, DR-001, etc.) alongside the constitution for more specific, actionable findings. Reference the specific rule ID in each finding.
 
 **If packs are NOT available**: proceed without them. Use the constitution and inline severity definitions only. No error or warning needed.
 
-### 7.5. Fetch Existing Review State
+##### Step E. Fetch Existing Review State
 
 Fetch existing PR reviews and inline comments to prevent
 duplicate findings and provide context for the AI review.
 
-#### 7.5a. Fetch Reviews
+###### Step E.1. Fetch Reviews
 
 ```bash
 gh api repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews \
@@ -371,7 +403,7 @@ Record each review's user, state (`APPROVED`,
 `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`), body,
 and commit ID.
 
-#### 7.5b. Fetch Inline Comments
+###### Step E.2. Fetch Inline Comments
 
 ```bash
 gh api repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments \
@@ -381,20 +413,20 @@ gh api repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments \
 Record each inline comment's file path, line number,
 body, and author.
 
-#### 7.5c. Identify Current User
+###### Step E.3. Identify Current User
 
 ```bash
 gh api user --jq '.login'
 ```
 
 Record the authenticated user's login for duplicate
-review detection in Step 11.
+review detection in the output step.
 
-#### 7.5d. Token Budget
+###### Step E.4. Token Budget
 
-Existing review comments passed to Step 8 MUST be capped
-at 3000 characters total to prevent token bloat. When the
-combined comment text exceeds this limit:
+Existing review comments passed to the AI review MUST be
+capped at 3000 characters total to prevent token bloat.
+When the combined comment text exceeds this limit:
 1. Filter to comments on files changed in this PR
 2. Sort by `created_at` descending (most recent first)
 3. Include comments until the 3000-character budget is
@@ -402,25 +434,26 @@ combined comment text exceeds this limit:
 4. Truncate the remainder with a note: "N additional
    prior comments truncated for token budget"
 
-#### 7.5e. Error Handling
+
+###### Step E.5. Error Handling
 
 If any `gh api` call in this step returns 403, 404, or
 times out:
 - Log the error
 - Skip the failed sub-step
-- Proceed to Step 8 without the missing context
+- Proceed to the AI review without the missing context
 
 The review continues without blocking. All review state
 data is additive context — its absence does not reduce
 the review's capability, only its deduplication accuracy.
 
-### 8. AI Review (Judgment-Based Only)
+##### Step F. AI Review (Judgment-Based Only)
 
 Focus AI analysis exclusively on what deterministic tools and CI cannot check. Skip any category where local tools or CI already passed.
 
-**Existing review deduplication** (using Step 7.5 data):
+**Existing review deduplication** (using Step E data):
 Before generating findings, cross-reference existing
-inline comments from Step 7.5b against the current
+inline comments from Step E.2 against the current
 analysis. For each finding:
 - If an existing inline comment covers the same file and
   line range with a similar concern: **annotate** the
@@ -437,40 +470,16 @@ analysis. For each finding:
   have additional context or a different severity
   assessment. Annotate, don't hide.
 
-**Path-based review focus**: Before starting the review,
-classify each changed file against these built-in
-heuristics. Record the focus category for each file
-(used in the Walkthrough output and as additive review
-context):
 
-| Path pattern | Focus category | Additional emphasis |
-|-------------|---------------|-------------------|
-| `*_test.go`, `*_test.py`, `**/__tests__/**`, `**/*_spec.*` | `test-quality` | Edge cases, assertion strength, mock isolation, test naming |
-| `**/cmd/**`, `**/cli/**` | `cli-ux` | Error messages, flag validation, help text |
-| `**/api/**`, `**/handler/**`, `**/middleware/**`, `**/routes/**` | `security` | Auth, input validation, injection |
-| `*.md`, `docs/**` | `documentation` | Clarity, accuracy, broken links |
-| `.github/workflows/**`, `Dockerfile*` | `ci-cd` | Permissions, pinned versions, secrets exposure |
-| `go.mod`, `package.json`, `requirements.txt` | `dependencies` | Maintenance status, license, scope |
-| Everything else | `standard` | Architecture, SOLID, coupling, baseline security |
+**Path-based review focus and walkthrough**: Use the
+file classifications and walkthrough summaries from
+Step C (review-context skill, Protocols 3 and 4).
+When reviewing each file, apply the matched focus
+instruction as additive review context. Step F.2
+(Security Review) applies to ALL changed files
+regardless of path heuristic.
 
-Path focus is **additive** — it supplements the standard
-review categories (alignment, security, constitution),
-not replaces them. Step 8b (Security Review) applies to
-ALL changed files regardless of path heuristic.
-
-When reviewing each file, append the matched focus
-instruction to the review context for that file.
-
-**Walkthrough generation**: While analyzing each file's
-diff, generate a one-line change summary describing
-what changed (e.g., "Add error handling for null
-inputs"), not how (no code snippets). Record the
-summary and focus category for each file — these are
-used in the `### Walkthrough` output section (Step 9).
-For PRs with 30+ files, generate directory-level
-summaries instead of per-file summaries.
-
-#### 8a. Alignment Check
+###### Step F.1. Alignment Check
 
 Compare the PR intent (title + description + linked spec + linked issues) against the actual code changes:
 
@@ -478,9 +487,21 @@ Compare the PR intent (title + description + linked spec + linked issues) agains
 - **Requirement coverage**: For each requirement in the spec (if found), verify the code changes address it. Flag uncovered requirements.
 - **Completeness**: Are there partial implementations that could leave the system in an inconsistent state?
 - **Drift detection**: Does the code do anything NOT described in the intent/spec? Flag undocumented behavioral changes.
-- **Issue criteria coverage**: For each acceptance criterion from linked issues (Step 6a), verify the code changes address it. Report uncovered criteria as MEDIUM findings with per-criterion status (COVERED / NOT COVERED / PARTIAL).
+- **Issue criteria coverage**: For each acceptance criterion from linked issues (Step C, Protocol 2), verify the code changes address it. Report uncovered criteria as MEDIUM findings with per-criterion status (COVERED / NOT COVERED / PARTIAL).
+- **Issue suggestion gap detection**: After checking
+  acceptance criteria, scan each linked issue body for
+  explicit code suggestions — fenced code blocks
+  (` ``` `), inline code spans, or clearly proposed
+  one-line fixes. For each suggestion found:
+  - Check whether the PR implemented the suggested
+    change.
+  - If implemented: no finding needed.
+  - If not implemented: flag as a finding. Assess
+    severity based on the risk of the gap (e.g., a
+    missing guard clause on a destructive operation is
+    HIGH; a missing style preference is LOW).
 
-#### 8b. Security Review
+###### Step F.2. Security Review
 
 Examine the diff for security vulnerabilities that linters cannot catch:
 
@@ -499,7 +520,28 @@ Examine the diff for security vulnerabilities that linters cannot catch:
 - **Secrets and credentials**: Are there hardcoded secrets, tokens, or API keys? Are secrets logged or exposed in error messages?
 - **Dependency risks**: Are new dependencies well-maintained and from trusted sources?
 
-#### 8c. Constitution Compliance (AI-only items)
+**Adversarial input enumeration**: For each new input,
+parameter, secret, or configuration value introduced
+by the PR, enumerate:
+- What values can a caller pass? (valid range, type,
+  format)
+- What happens for each edge case: empty string, wrong
+  type, wrong case (e.g., `"True"` vs `"true"`),
+  excessively long value, injection payload,
+  null/undefined?
+- Does validation exist? Is it sufficient? Is it
+  applied before the value reaches any security-
+  sensitive operation?
+- If the input controls a security-relevant behavior
+  (e.g., `skip_org_check`, `disable_verification`),
+  is there an audit trail when the input is used to
+  bypass a control?
+
+Flag missing or insufficient validation as findings
+with severity based on the blast radius of the
+unvalidated input.
+
+###### Step F.3. Constitution Compliance (AI-only items)
 
 Read `.specify/memory/constitution.md` if it exists. Extract all principles and their MUST/SHOULD rules. For each principle, check whether the PR's changes comply. **Only check items that local tools and CI did NOT already verify.**
 
@@ -507,9 +549,9 @@ If no constitution file exists, note this and review against general software en
 
 **Skip if already covered by local tools or CI**: naming conventions, line length, lint issues, formatting, file headers.
 
-#### 8d. CI Failure Analysis
+###### Step F.4. CI Failure Analysis
 
-For each CI failure classified in Step 3a, provide analysis:
+For each CI failure classified in the CI check results, provide analysis:
 
 **PR-caused failures**: Include as HIGH or CRITICAL findings:
 - Which check failed and what the error output says
@@ -519,11 +561,130 @@ For each CI failure classified in Step 3a, provide analysis:
 **Pre-existing failures**: Report separately with clear labeling:
 - Confirm the failure also exists on the base branch
 - Brief root cause analysis if determinable from the error output
-- Note that this will be addressed in Step 10 (fix-branch offer)
+- Note that this will be addressed in the fix-branch offer
 
-### 9. Output Format
+###### Step F.5. CI Bot Annotation Cross-referencing
 
-Present findings in this structured format:
+Before proceeding to consolidation, cross-reference the
+inline comments from Step E.2 against the findings
+generated in Steps F.1–F.4. Identify comments from CI
+bots (Scorecard, Trivy, `github-advanced-security[bot]`,
+Dependabot, CodeQL, etc.) that address the same files
+or concern classes as your findings.
+
+For each match:
+- **Cite the bot finding** in your own finding as
+  corroborating evidence (e.g., "Scorecard flagged the
+  same step for unpinned dependencies").
+- **Use the bot finding to strengthen** your severity
+  classification — if a bot already flagged a concern
+  and your analysis confirms it, the combined evidence
+  supports a higher confidence level.
+- Do NOT dismiss bot findings as "related but different"
+  when they address the same class of problem (e.g.,
+  dependency integrity, secrets exposure, container
+  misconfig) in the same pipeline stage or file.
+
+###### Step F.6. Finding Consolidation
+
+After generating all findings from Steps F.1–F.5, perform
+a consolidation pass before formatting output.
+
+**Consolidation rule**: Group findings that (a) affect
+the same component, pipeline stage, or file cluster,
+(b) share a common root cause, and (c) together produce
+a risk greater than any individual finding. Merge each
+group into a single finding.
+
+For each consolidated finding:
+1. Use the highest individual severity as the floor,
+   then apply the compound severity escalation rule from
+   `severity.md` to determine if the combined severity
+   is higher.
+2. List each contributing factor as a sub-point in the
+   finding description.
+3. Cite the original category (alignment, security,
+   constitution) for each contributing factor so
+   traceability is preserved.
+4. Present one unified recommendation that addresses
+   the root cause, not separate fixes for each symptom.
+
+**When NOT to consolidate**: Findings with independent
+root causes and independent blast radii MUST remain
+separate even if they appear in the same file.
+
+###### Step F.7. Severity Calibration
+
+After consolidation, perform a calibration pass over
+every finding (including consolidated findings from
+Step F.6). This step counters anchoring bias — the
+tendency to compress all severities toward a "feels
+right" level based on overall PR quality impressions.
+
+For each finding:
+1. Re-read the `severity.md` definition for the
+   currently assigned severity level.
+2. Quote the specific definition clause or example
+   that matches the finding. If no clause matches,
+   check the adjacent severity levels (one above, one
+   below).
+3. If the quoted definition maps to a **different**
+   severity than the current assignment, adjust the
+   severity and note the change (e.g., "Reclassified
+   from MEDIUM to HIGH — matches HIGH definition:
+   'unpinned CI action on mutable tag'").
+4. If the definition confirms the current assignment,
+   retain it with the quoted evidence.
+
+The calibration pass MUST NOT introduce new findings
+— it only adjusts severity levels on existing findings.
+
+**Return your findings in this format:**
+
+```
+### CI Coverage Matrix
+[table from Step A]
+
+### Local Tool Results
+[results from Step A]
+
+### Walkthrough
+[table from Step C]
+
+### Linked Issues
+[from Step C, if any]
+
+### Summary
+[1-2 sentence assessment]
+
+### Alignment
+[findings from Step F.1 with severity]
+
+### Security
+[findings from Step F.2 with severity]
+
+### Constitution Compliance
+[findings from Step F.3 with severity]
+
+### CI Failures (PR-caused)
+[findings from Step F.4, if any]
+
+### CI Failures (Pre-existing)
+[findings from Step F.4, if any]
+
+### Verdict
+**<APPROVE / REQUEST CHANGES / COMMENT>**
+[brief justification]
+```
+
+#### END SUBAGENT PROMPT
+
+---
+
+### 5. Output Format
+
+Parse the subagent's returned findings and present them
+in this structured format:
 
 ```markdown
 ## PR Review: #<NUMBER> — <TITLE>
@@ -549,7 +710,7 @@ Present findings in this structured format:
 | `internal/gateway/` | 3 | Token refresh and provider detection | security |
 
 ### Linked Issues
-<Only include this section if Step 6a found linked issues>
+<Only include this section if the subagent found linked issues>
 | Issue | Title | Criteria |
 |-------|-------|----------|
 | #38 | Export metrics to CSV | 3/4 COVERED |
@@ -584,7 +745,7 @@ Present findings in this structured format:
 <Brief justification. Pre-existing CI failures do NOT block the PR verdict.>
 ```
 
-**Severity levels** (use `.opencode/uf/packs/severity.md` definitions if loaded in Step 7, otherwise use these defaults):
+**Severity levels** (use `.opencode/uf/packs/severity.md` definitions if loaded by the subagent, otherwise use these defaults):
 - **CRITICAL**: Must be fixed before merge (security vulnerabilities, data loss risks)
 - **HIGH**: Should be fixed before merge (spec violations, missing tests for critical paths, PR-caused CI failures)
 - **MEDIUM**: Recommended to fix (code quality, minor compliance issues)
@@ -592,7 +753,7 @@ Present findings in this structured format:
 
 If no issues are found in a category, state "No issues found."
 
-### 10. Offer Fix-Branch for Pre-existing CI Failures
+### 6. Offer Fix-Branch for Pre-existing CI Failures
 
 If Step 3a identified any **pre-existing** CI failures, offer to create a fix branch:
 
@@ -601,12 +762,12 @@ I identified <N> pre-existing CI failure(s) that are NOT caused by this PR:
 - <check name>: <brief description of failure>
 
 These failures also occur on the base branch (<BASE_BRANCH>).
-
-Would you like me to create a fix branch with a proposed resolution?
-I will create the branch and commit locally — you can review the changes and file a PR when ready.
 ```
 
-**If the user agrees**:
+Use the **question tool** with options
+`["Yes -- create fix branch", "No -- skip"]`.
+
+**If the user selects "Yes -- create fix branch"**:
 
 1. **Verify clean working tree**:
    ```bash
@@ -614,7 +775,7 @@ I will create the branch and commit locally — you can review the changes and f
    ```
    If the output is not empty: **STOP** branch creation with message:
    > "Working tree has uncommitted changes. Commit or stash them before creating a fix branch."
-   Switch back to the PR branch and continue to Step 11.
+   Switch back to the PR branch and continue to Step 7.
 
 2. **Check for branch name collision**:
    ```bash
@@ -622,7 +783,7 @@ I will create the branch and commit locally — you can review the changes and f
    ```
    If the branch already exists, inform the user:
    > "Branch `fix/pr-<PR_NUMBER>-<check-name>` already exists. Switch to it with `git checkout fix/pr-<PR_NUMBER>-<check-name>`, or delete it first."
-   Switch back to the PR branch and continue to Step 11.
+   Switch back to the PR branch and continue to Step 7.
 
 3. **Sanitize the check name** for branch-name safety:
    lowercase, replace spaces and special characters with
@@ -640,6 +801,57 @@ I will create the branch and commit locally — you can review the changes and f
 
 5. **Analyze and propose the fix**: Use the CI failure output and the failing file(s) to determine the minimal change needed. Keep the scope as small as possible — fix only what is failing.
 
+   >>> MANDATORY GATE: HUMAN CONFIRMATION REQUIRED <<<
+
+   **Session-resume guard**: If this session was resumed
+   from compressed context, or if you cannot verify that
+   the human explicitly confirmed the fix-branch commit
+   in the current uncompressed conversation history,
+   you MUST re-present the commit preview below and
+   obtain fresh confirmation via the **question tool**
+   before committing. Do NOT rely on confirmation
+   recorded in compressed context. When in doubt,
+   re-confirm — false re-confirmation is harmless;
+   committing without consent is a violation.
+
+   Before committing, show the user:
+
+   > **Fix-branch commit preview:**
+   >
+   > ```
+   > git diff --cached --stat
+   > ```
+   >
+   > **Proposed commit message:**
+   > ```
+   > fix: resolve <failing-check> CI failure
+   >
+   > <Brief description>
+   >
+   > This failure was pre-existing on <BASE_BRANCH>
+   > and unrelated to PR #<PR_NUMBER>.
+   >
+   > Assisted-by: <model>
+   > ```
+
+   Use the **question tool** with options
+   `["Commit -- apply fix",
+   "Edit commit message", "Abort -- discard changes"]`.
+
+   - **"Commit -- apply fix"**: Proceed with the commit
+     using the displayed message.
+   - **"Edit commit message"**: Let the user modify the
+     commit message, then re-confirm.
+   - **"Abort -- discard changes"**: Discard staged
+     changes and skip the fix branch. Switch back to
+     the PR branch.
+
+   **CRITICAL RULE**: NEVER commit on a fix branch
+   without explicit human confirmation via the
+   **question tool**.
+
+   >>> END MANDATORY GATE <<<
+
 6. **Commit with Conventional Commits format**:
    Write the commit message to a temporary file to avoid
    shell injection from AI-generated description text,
@@ -656,8 +868,27 @@ I will create the branch and commit locally — you can review the changes and f
 
    This failure was pre-existing on <BASE_BRANCH> and unrelated to PR #<PR_NUMBER>.
 
-   Assisted-by: OpenCode (<model>)
+   Assisted-by: <model>
    ```
+
+   Where `<model>` is the model family name you are
+   currently running as. To resolve the model name:
+   (1) read your model identifier from the system
+   prompt or runtime environment; (2) remove everything
+   before and including the last `/`; (3) remove
+   everything after and including the first `@`;
+   (4) remove any trailing date suffix matching
+   `-YYYYMMDD` (a hyphen followed by exactly 8 digits);
+   (5) repeatedly remove any trailing version segment
+   matching `-N` (a hyphen followed by a single digit
+   at the end) until no more remain; (6) validate the
+   result contains only
+   `[a-zA-Z0-9._-]` characters. If the result is
+   empty, contains invalid characters, or cannot be
+   determined, use the literal string `unknown-model`
+   and warn the user (e.g., "Could not determine AI
+   model name — using 'unknown-model' in
+   attribution").
    Remove the temp file after committing.
 
 7. **Report to the user**:
@@ -687,48 +918,48 @@ I will create the branch and commit locally — you can review the changes and f
   I recommend investigating this separately rather than proposing an automated fix.
   ```
 
-### 11. Offer Verdict-aligned PR Review
+### 7. Offer Verdict-aligned PR Review
 
 After presenting the review, if there are findings with
-severity HIGH or above, offer to post them as a formal
-GitHub review on the PR:
+severity HIGH or above, show the following framing text:
 
 ```
 I found <N> findings (X CRITICAL, Y HIGH).
 Verdict: <APPROVE / REQUEST CHANGES / COMMENT>
-
-Would you like me to post this as a GitHub review so the
-author can see the findings in context?
-
-I will prepare the review and show it to you for approval
-before posting anything.
 ```
 
-**If the user agrees**:
+Regardless of finding severities, always offer to post
+the review as a formal GitHub review on the PR. Use the
+**question tool** with options
+`["Yes -- post as GitHub review", "No -- terminal
+summary is sufficient"]`.
 
-#### 11a. Pre-posting Checks
+**If the user selects "Yes -- post as GitHub review"**:
+
+#### 7a. Pre-posting Checks
 
 Before preparing comments, run three state-awareness
-checks using data from Step 7.5:
+checks using the review state data returned by the
+subagent (from its Step E):
 
 **Duplicate review detection**: Check if a review from
-the current user (Step 7.5c) already exists in the
-review list (Step 7.5a):
+the current user (from the subagent's user identification)
+already exists in the review list (from the subagent's
+review fetch):
 
 - If a prior review with the **same verdict** exists:
-  ```
-  You already have an <APPROVE/REQUEST_CHANGES> review
-  on this PR. Post a new one? (The latest review takes
-  precedence.)
-  (yes/no)
-  ```
+  Inform the user that a prior review exists and the
+  latest review takes precedence. Use the
+  **question tool** with options
+  `["Yes -- post new review", "No -- skip posting"]`.
+
 - If a prior review with a **different verdict** exists:
-  ```
-  You have a prior <old_verdict> review. Post a new
-  <new_verdict>? This will override the previous
-  verdict.
-  (yes/no)
-  ```
+  Inform the user of the prior verdict and that the new
+  review will override it. Use the
+  **question tool** with options
+  `["Yes -- override with <new_verdict>",
+  "No -- keep existing <old_verdict>"]`.
+
 - If no prior review exists: proceed silently.
 
 **Stale review + CODEOWNER checks** (APPROVE verdicts
@@ -748,19 +979,45 @@ If `dismiss_stale` is true, display:
 Warning: This repo dismisses stale reviews. If the author
 pushes any new commits after this APPROVE, it will be
 automatically invalidated and the PR will return to
-REVIEW_REQUIRED. You may need to re-run /review-pr after
+REVIEW_REQUIRED. You may need to re-run /uf.review-pr after
 final commits.
 ```
 
 If `require_codeowners` is true, check for CODEOWNERS
-file:
+file. Try each path in order, short-circuiting on the
+first success:
+
+```bash
+gh api repos/{owner}/{repo}/contents/.github/CODEOWNERS \
+  --jq '.name'
+```
+
+If that returns 404, try the next path:
 
 ```bash
 gh api repos/{owner}/{repo}/contents/CODEOWNERS \
-  --jq '.name' 2>/dev/null || \
-gh api repos/{owner}/{repo}/contents/.github/CODEOWNERS \
-  --jq '.name' 2>/dev/null
+  --jq '.name'
 ```
+
+If that also returns 404, try the third path:
+
+```bash
+gh api repos/{owner}/{repo}/contents/docs/CODEOWNERS \
+  --jq '.name'
+```
+
+**Error handling**:
+- **404 response**: treat as "file not found at this
+  path" and try the next path. This is expected and
+  silent.
+- **Non-404 error** (network failure, 500, 429, etc.):
+  stop checking further paths and display:
+  ```
+  Note: CODEOWNERS check was inconclusive (API error).
+  Could not determine if this repo uses CODEOWNERS.
+  ```
+- **Success** (any path returns the file name): stop
+  checking further paths. CODEOWNERS exists.
 
 If CODEOWNERS exists and `require_code_owner_reviews` is
 true, display:
@@ -770,7 +1027,17 @@ APPROVE may not satisfy branch protection if this
 account is not listed in CODEOWNERS.
 ```
 
-If any API call fails: skip silently.
+**Session-resume guard**: If this session has been
+   resumed from compressed context, or if you cannot
+   verify that the human explicitly confirmed the review
+   in the current uncompressed conversation history, you
+   MUST re-present the review content (verdict + all
+   comments) and obtain fresh confirmation via the
+   **question tool** before posting. Do NOT rely
+   on confirmation recorded in compressed context. When
+   in doubt, re-confirm — false re-confirmation is
+   harmless; posting without consent is a violation.
+
 
 1. **Prepare comments**: For each finding that maps to a
    specific file and line range in the diff, prepare an
@@ -805,6 +1072,8 @@ If any API call fails: skip silently.
    qualify, prioritize CRITICAL over HIGH. Include
    remaining findings in the review body summary.
 
+>>> MANDATORY GATE: HUMAN CONFIRMATION REQUIRED <<<
+
 2. **Show all comments for human review**: Present each
    prepared comment with its full before/after context:
    ```
@@ -815,32 +1084,28 @@ If any API call fails: skip silently.
    ```
 
 3. **Verdict-aligned confirmation**: Map the verdict from
-   Step 9 to the GitHub API event type:
+   Step 5 to the GitHub API event type:
    - APPROVE → `"event": "APPROVE"`
    - REQUEST CHANGES → `"event": "REQUEST_CHANGES"`
    - COMMENT → `"event": "COMMENT"`
 
-   Display the confirmation prompt with the verdict type:
+   Display the verdict context, then use the
+   **question tool** for confirmation:
 
-   For APPROVE verdicts:
-   ```
-   Post review as APPROVE with N comments?
-   ⚠ This may unblock merge in repos with branch
-     protection. This review will be labeled as
-     AI-generated.
-   Type "approve" to confirm:
-   (approve/no/edit/change-verdict)
-   ```
+   For APPROVE verdicts: inform the user that this may
+   unblock merge in repos with branch protection and
+   that the review will be labeled as AI-generated.
+   Use the **question tool** with options
+   `["Approve -- post review", "No -- skip posting",
+   "Edit comments first", "Change verdict"]`.
 
-   For REQUEST CHANGES or COMMENT verdicts:
-   ```
-   Post review as REQUEST CHANGES with N comments?
-   ⚠ This will block merge in repos with branch
-     protection.
-   (yes/no/edit/change-verdict)
-   ```
+   For REQUEST CHANGES or COMMENT verdicts: inform the
+   user that this will block merge in repos with branch
+   protection. Use the **question tool** with
+   options `["Yes -- post review", "No -- skip posting",
+   "Edit comments first", "Change verdict"]`.
 
-   The `change-verdict` option lets the user override the
+   The "Change verdict" option lets the user override the
    computed verdict (e.g., downgrade REQUEST CHANGES to
    COMMENT).
 
@@ -856,7 +1121,7 @@ If any API call fails: skip silently.
    ```
 
    The review body MUST include the line:
-   `_This review was generated by /review-pr
+   `_This review was generated by /uf.review-pr
    (AI-assisted)._`
 
    Always write the JSON payload to a temporary file
@@ -876,13 +1141,19 @@ If any API call fails: skip silently.
    token lacks write permissions for PR reviews and
    suggest re-authenticating with `gh auth login`.
 
-   - **no**: Skip posting, the terminal summary is sufficient
-   - **edit**: Let the user modify comments before posting, then re-confirm
+   - **"No -- skip posting"**: Skip posting, the terminal summary is sufficient
+   - **"Edit comments first"**: Let the user modify comments before posting, then re-confirm with the **question tool**
 
 5. **CRITICAL RULE**: NEVER post reviews without explicit
-   human confirmation. Always show the exact content
-   (verdict type + all comments) that will be posted and
-   wait for approval. For APPROVE verdicts, require the
-   user to type "approve" explicitly — not just "yes" —
-   to prevent reflexive confirmation of merge-unblocking
-   reviews.
+   human confirmation via the **question tool**.
+   Always show the exact content (verdict type + all
+   comments) that will be posted and wait for the user
+   to select a confirming option. For APPROVE verdicts,
+   the user MUST select the "Approve -- post review"
+   option — a clearly-labeled action that conveys the
+   merge-unblocking consequence.
+
+>>> END MANDATORY GATE <<<
+
+</protect>
+

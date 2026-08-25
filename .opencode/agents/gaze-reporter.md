@@ -5,6 +5,7 @@ description: >
   metrics, side effect classifications, and overall project health.
   Supports three modes: crap (CRAP scores only), quality (test
   quality metrics only), and full (comprehensive health assessment).
+mode: subagent
 tools:
   read: true
   bash: true

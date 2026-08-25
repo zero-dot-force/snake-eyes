@@ -10,6 +10,12 @@ sources:
     config:
       path: "."
 
+  - id: disk-.github
+    type: disk
+    name: .github
+    config:
+      path: "../.github"
+
   # Org-level files (design papers, plans)
   - id: disk-org
     type: disk
@@ -26,4 +32,5 @@ sources:
       org: zero-dot-force
       repos:
         - snake-eyes
+        - .github
     refresh_interval: daily

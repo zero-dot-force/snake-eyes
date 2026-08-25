@@ -3,6 +3,7 @@ description: Perform a read-only testability analysis of spec artifacts by deleg
 ---
 <!-- scaffolded by gaze dev -->
 
+<protect>
 ## User Input
 
 ```text
@@ -132,6 +133,7 @@ Ask the user: "Would you like me to suggest concrete remediation edits for the t
 - **Prioritize Principle IV violations** (these are always CRITICAL)
 - **Missing coverage strategy is CRITICAL** — not HIGH, not MEDIUM
 - **Report zero issues gracefully** (emit success report with testability statistics)
+</protect>
 
 ## Context
 

@@ -27,6 +27,47 @@ Check for a `tasks.md` file in the active spec directory:
 If `tasks.md` exists, follow the instructions below. If no
 `tasks.md` exists, proceed with standard CASS decomposition.
 
+## Pre-conditions
+
+**CRITICAL**: All work MUST be committed and pushed on the
+current feature branch before any branch switch occurs.
+
+- After completing all phases, commit and push all changes
+  before suggesting PR creation, merging, or switching to
+  `main`.
+- Before creating a new feature branch (via `/speckit.specify`),
+  check `git status --short` for uncommitted changes. If
+  uncommitted changes exist, use the **question tool**
+  to confirm before proceeding. Include the `git status --short`
+  output in the question so the user can see which files are
+  uncommitted:
+
+  > "Uncommitted changes detected. Switching branches with
+  > a dirty working tree may cause changes to be applied
+  > to the wrong branch or lost."
+
+  Use options:
+  `["Stash changes and continue",
+  "Abort -- keep changes as-is"]`
+
+  - If the user selects **"Stash changes and continue"**:
+    run `git stash`. If `git stash` returns a non-zero exit
+    code, **STOP** the workflow, report the stash failure to
+    the user, and do NOT proceed to branch creation. If
+    `git stash` succeeds, re-run `git status --short` to
+    verify the working tree is clean. If the working tree is
+    still not clean, **STOP** and report the remaining
+    uncommitted changes. Only when the working tree is
+    confirmed clean, proceed to branch creation. Upon
+    workflow completion, inform the user that their changes
+    are stashed and can be restored with `git stash pop`.
+  - If the user selects **"Abort -- keep changes as-is"**:
+    **STOP** the workflow immediately without creating a
+    branch or modifying the working tree.
+- Never silently switch branches with a dirty working tree.
+  Uncommitted changes may follow to the wrong branch or be
+  lost entirely.
+
 ## Reading tasks.md
 
 ### Phase Structure
@@ -111,22 +152,6 @@ After all tasks in a phase are complete:
    before advancing to the next phase
 3. Report phase completion via `swarm_status()`
 
-## Branch Safety
-
-**CRITICAL**: All work MUST be committed and pushed on the
-current feature branch before any branch switch occurs.
-
-- After completing all phases, commit and push all changes
-  before suggesting PR creation, merging, or switching to
-  `main`.
-- Before creating a new feature branch (via `/speckit.specify`),
-  check `git status --short` for uncommitted changes. If
-  uncommitted changes exist, **STOP** and ask the user for
-  confirmation before switching branches.
-- Never silently switch branches with a dirty working tree.
-  Uncommitted changes may follow to the wrong branch or be
-  lost entirely.
-
 ## Prerequisite Skill
 
 Load `unbound-force-heroes` alongside this skill to get
@@ -139,10 +164,10 @@ skills_use({ name: "speckit-workflow" })
 
 ## Entry Point
 
-The `/unleash` command is the primary way to trigger
+The `/uf.unleash` command is the primary way to trigger
 autonomous pipeline execution using this skill. It
 orchestrates the full Speckit pipeline (clarify, plan,
 tasks, spec review, implement, code review,
 retrospective, demo) and uses the task format described
-above for the implementation phase. `/unleash` also
+above for the implementation phase. `/uf.unleash` also
 supports OpenSpec (`opsx/*`) branches.

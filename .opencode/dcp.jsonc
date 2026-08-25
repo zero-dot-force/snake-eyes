@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Opencode-DCP/opencode-dynamic-context-pruning/master/dcp.schema.json",
+  // Enable <protect> tag preservation during DCP compression.
+  // Slash command files in .opencode/commands/ use <protect> tags
+  // to mark execution-critical sections (guardrails, checklists,
+  // mandatory gates) that must survive context pruning.
+  "compress": {
+    "protectTags": true
+  }
+}
