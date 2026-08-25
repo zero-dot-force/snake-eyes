@@ -23,6 +23,8 @@ or after updating the OpenSpec CLI (`npm update`). Safe to re-run
 
 ## Instructions
 
+<protect>
+
 ### Step 0: Command Directory Migration
 
 Check whether the legacy `.opencode/command/` directory needs
@@ -976,3 +978,5 @@ Re-run `/uf.init` after:
    or on Fedora/RHEL: `sudo dnf upgrade unbound-force`
    — new versions may add scaffold files that need
    customization)
+
+</protect>

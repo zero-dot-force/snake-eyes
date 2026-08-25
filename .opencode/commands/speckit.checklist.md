@@ -67,6 +67,13 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Execution Steps
 
+**STOP HERE. Do NOT proceed to implementation.**
+
+Your job is done. Report the results and prompt the
+user. The user will invoke a separate command
+(`/speckit.implement`, `/unleash`, or `/cobalt-crush`)
+when they are ready to implement.
+
 1. **Setup**: Run `.specify/scripts/bash/check-prerequisites.sh --json` from repo root and parse JSON for FEATURE_DIR and AVAILABLE_DOCS list.
    - All file paths must be absolute.
    - For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
@@ -374,3 +381,6 @@ Check if `.specify/extensions.yml` exists in the project root.
   - Files within `FEATURE_DIR` (spec artifacts:
     plan.md, tasks.md, research.md, data-model.md,
     quickstart.md, contracts/, checklists/)
+- The user needs to review the plan before
+  implementation begins. Implementing without review
+  defeats the purpose of the spec-first workflow.

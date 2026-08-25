@@ -39,6 +39,73 @@ When ready to implement, run /opsx-apply
    ```
    This creates a scaffolded change at `openspec/changes/<name>/` with `.openspec.yaml`.
 
+   **Check for uncommitted changes**
+
+   Before creating or switching branches, run
+   `git status --short`. If there are uncommitted changes
+   (staged, unstaged, or untracked files that appear
+   related to work):
+   - **STOP** and ask the user for confirmation before
+     switching branches. Show what uncommitted changes
+     exist and warn that switching branches with a dirty
+     working tree may cause changes to be applied to the
+     wrong branch.
+   - If the user confirms, proceed. If not, abort.
+   - Exception: if the user explicitly requested a new
+     change, this still requires confirmation -- never
+     silently switch branches with uncommitted work.
+
+   **Create and checkout a branch**
+
+   ```bash
+   git checkout -b opsx/<name>
+   ```
+
+   **Guard**: Before creating the branch, check the current branch:
+   - If already on `opsx/<name>` (exact match): skip branch creation, proceed.
+   - If on a different `opsx/*` branch: **STOP** with error: "Already on branch `opsx/<other>` -- finish or archive that change first."
+   - If on `main` or any non-opsx branch: create and checkout `opsx/<name>`.
+
+   **Retrieve context from Dewey**
+
+   Before drafting the proposal, query Dewey for relevant context:
+
+   - `dewey_semantic_search` with the change description to find
+     related specs, past proposals, and similar changes
+   - `dewey_semantic_search_filtered` with `source_type: "github"`
+     to find related issues across the organization
+   - `dewey_traverse` on any discovered related specs to understand
+     dependencies
+
+   Use the retrieved context to inform the proposal's scope,
+   identify potential conflicts with existing work, and reference
+   relevant prior decisions.
+
+   If Dewey is unavailable, proceed without cross-repo context --
+   use direct file reads of local specs and backlog items instead.
+
+   **Dewey Availability Tiers**
+
+   Adjust context retrieval based on Dewey availability:
+
+   **Tier 3 (Full Dewey)**: Use `dewey_semantic_search`,
+   `dewey_search`, `dewey_traverse`, and
+   `dewey_semantic_search_filtered` for comprehensive cross-repo
+   and toolstack context.
+
+   **Tier 2 (Graph-only, no embedding model)**: Use
+   `dewey_search` and `dewey_traverse` for keyword-based and
+   structural queries. Semantic search is unavailable.
+
+   **Tier 1 (No Dewey)**: Fall back to direct file operations:
+   - Use the Read tool to read local specs, backlog items, and
+     convention packs
+   - Use the Grep tool for keyword search across the codebase
+   - Reference `.opencode/uf/packs/` for coding standards
+
+   All tiers produce valid results. Higher tiers provide richer
+   cross-repo context but are never required.
+
 3. **Get the artifact build order**
    ```bash
    openspec status --change "<name>" --json

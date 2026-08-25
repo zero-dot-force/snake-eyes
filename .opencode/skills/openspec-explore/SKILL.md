@@ -79,6 +79,50 @@ Depending on what the user brings, you might:
 
 You have full context of the OpenSpec system. Use it naturally, don't force it.
 
+### Use Dewey for investigation
+
+When exploring ideas or investigating problems, use Dewey as
+the primary context source:
+
+- `dewey_semantic_search` to find conceptually related content
+  across all indexed sources (specs, issues, docs)
+- `dewey_similar` to find documents similar to the one being
+  explored
+- `dewey_traverse` to follow relationships between related
+  documents
+- `dewey_semantic_search_filtered` to narrow searches by source
+  type (e.g., only GitHub issues, only web docs)
+
+Dewey provides cross-repo context that direct file reads cannot
+-- it finds related content even when different terminology is
+used.
+
+If Dewey is unavailable, fall back to direct file reads using
+the Read and Grep tools, and reference convention packs for
+standards.
+
+### Dewey Availability Tiers
+
+Adjust context retrieval based on Dewey availability:
+
+**Tier 3 (Full Dewey)**: Use `dewey_semantic_search`,
+`dewey_search`, `dewey_traverse`, and
+`dewey_semantic_search_filtered` for comprehensive cross-repo
+and toolstack context.
+
+**Tier 2 (Graph-only, no embedding model)**: Use
+`dewey_search` and `dewey_traverse` for keyword-based and
+structural queries. Semantic search is unavailable.
+
+**Tier 1 (No Dewey)**: Fall back to direct file operations:
+- Use the Read tool to read local specs, backlog items, and
+  convention packs
+- Use the Grep tool for keyword search across the codebase
+- Reference `.opencode/uf/packs/` for coding standards
+
+All tiers produce valid results. Higher tiers provide richer
+cross-repo context but are never required.
+
 ### Check for context
 
 At the start, quickly check what exists:
@@ -286,3 +330,8 @@ But this summary is optional. Sometimes the thinking IS the value.
 - **Do visualize** - A good diagram is worth many paragraphs
 - **Do explore the codebase** - Ground discussions in reality
 - **Do question assumptions** - Including the user's and your own
+- Don't switch branches without confirmation -- If
+  exploration leads to creating a proposal (which
+  requires a new `opsx/` branch), check for uncommitted
+  changes first and ask the user before switching.
+  Never silently leave uncommitted work behind.

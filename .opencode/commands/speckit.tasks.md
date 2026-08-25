@@ -55,6 +55,13 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
+**STOP HERE. Do NOT proceed to implementation.**
+
+Your job is done. Report the results and prompt the
+user. The user will invoke a separate command
+(`/speckit.implement`, `/unleash`, or `/cobalt-crush`)
+when they are ready to implement.
+
 1. **Setup**: Run `.specify/scripts/bash/setup-tasks.sh --json` from repo root and parse FEATURE_DIR, TASKS_TEMPLATE, and AVAILABLE_DOCS list. `FEATURE_DIR` and `TASKS_TEMPLATE` must be absolute paths when provided. `AVAILABLE_DOCS` is a list of document names/relative paths available under `FEATURE_DIR` (for example `research.md` or `contracts/`). For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
 1b. **Retrieve context from Dewey**: Before generating tasks, query Dewey for relevant patterns:
@@ -220,3 +227,6 @@ Every task MUST strictly follow this format:
   - Files within `FEATURE_DIR` (spec artifacts:
     plan.md, tasks.md, research.md, data-model.md,
     quickstart.md, contracts/, checklists/)
+- The user needs to review the plan before
+  implementation begins. Implementing without review
+  defeats the purpose of the spec-first workflow.

@@ -65,6 +65,13 @@ The text the user typed after `/speckit.specify` in the triggering message **is*
 
 Given that feature description, do this:
 
+**STOP HERE. Do NOT proceed to implementation.**
+
+Your job is done. Report the results and prompt the
+user. The user will invoke a separate command
+(`/speckit.implement`, `/unleash`, or `/cobalt-crush`)
+when they are ready to implement.
+
 1. **Generate a concise short name** (2-4 words) for the feature:
    - Analyze the feature description and extract the most meaningful keywords
    - Create a 2-4 word short name that captures the essence of the feature
@@ -347,3 +354,6 @@ Success criteria must be:
   - Files within `FEATURE_DIR` (spec artifacts:
     plan.md, tasks.md, research.md, data-model.md,
     quickstart.md, contracts/, checklists/)
+- The user needs to review the plan before
+  implementation begins. Implementing without review
+  defeats the purpose of the spec-first workflow.
