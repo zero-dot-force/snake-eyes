@@ -18,6 +18,33 @@ when analyzing Python projects.
 - **Parent project**: [Gaze](https://github.com/unbound-force/gaze) (unbound-force)
 - **Organization**: [zero-dot-force](https://github.com/zero-dot-force) (labs incubator for unbound-force)
 
+## Constitution (Highest Authority)
+
+The Snake Eyes constitution
+(`.specify/memory/constitution.md`) is the highest-authority
+document for this project. It extends the unbound-force org
+constitution (v1.2.0) and pins Gaze protocol v1.1.0.
+Constitution violations are CRITICAL severity and
+non-negotiable.
+
+**Five principles:**
+
+1. **Protocol Fidelity** -- implement the Gaze analyzer
+   protocol precisely; deterministic output; deviations are
+   bugs
+2. **Detection Accuracy** -- correctly identify all
+   observable side effects; ambiguity over omission; false
+   positives and false negatives are bugs
+3. **Python-Native Analysis** -- use Python's own parsing
+   infrastructure (ast, symtable, astroid); do not
+   reimplement Python semantics
+4. **Testability** -- every function testable in isolation;
+   coverage strategy required in every spec; protocol
+   conformance suites required
+5. **Analysis Safety** -- analyzed source is untrusted
+   input; static analysis only; never execute analyzed
+   code; dependency necessity justified
+
 ## Architecture
 
 Snake Eyes is a JSON-RPC server that Gaze spawns as a
@@ -75,28 +102,34 @@ Planned later: `discovery.py`, `analysis/`, `complexity.py`, `coverage.py` (issu
 
 ## Shell Commands
 
+Commands are derived from `.github/workflows/ci.yml`.
+Do not rely on memory -- check the workflow file for the
+current gates.
+
 ```bash
-# Install dependencies
-uv sync
-
-# Run tests
-uv run pytest
-
-# Run tests with coverage
-uv run pytest --cov=snake_eyes --cov-report=term-missing
-
-# Type checking
-uv run mypy src/
+# Install dependencies (CI uses --locked)
+uv sync --locked
 
 # Linting
 uv run ruff check src/ tests/
 
-# Formatting
-uv run ruff format src/ tests/
+# Format check (CI runs --check, not auto-format)
+uv run ruff format --check src/ tests/
+
+# Type checking
+uv run mypy src/
+
+# Run tests with coverage (85% is the protected gate)
+uv run pytest --cov=snake_eyes --cov-report=term-missing --cov-fail-under=85
 
 # Run snake-eyes in stdio mode (for testing with gaze)
 uv run snake-eyes --stdio
 ```
+
+**Protected gates** (agents MUST NOT lower these):
+- `--cov-fail-under=85` -- minimum coverage percentage
+- `ruff format --check` -- formatting must pass, not auto-fix
+- `uv sync --locked` -- lockfile integrity
 
 ## Core Mission
 
@@ -165,9 +198,56 @@ Agents MUST NOT cross workflow phase boundaries:
   agents MUST run the same checks CI runs. Derive commands
   from workflow files, not memory.
 
+## Spec Organization
+
+Snake Eyes uses two spec pipelines. Choose based on scope:
+
+| Criterion | Speckit (`specs/NNN-*/`) | OpenSpec (`openspec/changes/`) |
+|---|---|---|
+| **Scope** | Strategic: ≥3 tasks or cross-cutting | Tactical: 1–2 tasks, focused |
+| **Artifacts** | spec, plan, tasks, checklists | proposal, design, tasks |
+| **When to use** | New analysis capabilities, protocol changes, architecture | Bug fixes, small features, docs |
+| **Example** | `specs/001-jsonrpc-prototype/` | `openspec/changes/fix-parse-error/` |
+
+**Ordering constraints**: spec artifacts MUST be committed
+before implementation begins. Implementation commits MUST
+NOT be in the same commit as spec changes.
+
+**Task Completion Bookkeeping**: When completing a task
+from a tasks file, mark the checkbox `- [x]` immediately
+-- not in a batch at the end.
+
+## Workflow Gates
+
+### Constitution Check
+
+Before implementation, verify alignment with all five
+constitution principles. The check MUST name each principle
+and give a PASS/FAIL verdict:
+
+1. Protocol Fidelity
+2. Detection Accuracy
+3. Python-Native Analysis
+4. Testability
+5. Analysis Safety
+
+### Review Council Gate
+
+Run `uf.review-council` before creating a PR. All
+reviewers MUST APPROVE before the PR is eligible for
+merge. Exempt: constitution amendments, docs-only changes,
+emergency hotfixes.
+
+### CI Parity Gate
+
+Before marking any task complete, agents MUST run the same
+checks CI runs. Derive commands from
+`.github/workflows/ci.yml`, not from memory.
+
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
+under `specs/` or `openspec/changes/`.
 <!-- SPECKIT END -->
 
 ## Convention Packs
@@ -181,3 +261,7 @@ before writing or reviewing code.
 - `.opencode/uf/packs/severity.md`
 - `.opencode/uf/packs/content.md`
 - `.opencode/uf/packs/content-custom.md`
+- `.opencode/uf/packs/python.md`
+- `.opencode/uf/packs/python-custom.md`
+- `.opencode/uf/packs/ci.md`
+- `.opencode/uf/packs/ci-custom.md`
