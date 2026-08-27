@@ -23,7 +23,7 @@ The system SHALL process requests sequentially, one at a time, and SHALL NOT pip
 - **THEN** two responses are produced in the same order as the requests
 
 ### Requirement: Empty line and EOF handling
-The system SHALL ignore empty lines. On stdin EOF without a prior `shutdown`, the system SHALL exit 0 without writing a response. Signal-based termination (SIGTERM/SIGINT) falls back to default Python behavior; no deterministic teardown is required for a Gaze-managed subprocess.
+The system SHALL ignore empty and whitespace-only lines. On stdin EOF without a prior `shutdown`, the system SHALL exit 0 without writing a response. Signal-based termination (SIGTERM/SIGINT) falls back to default Python behavior; no deterministic teardown is required for a Gaze-managed subprocess.
 
 #### Scenario: Empty line ignored
 - **WHEN** an empty line is written between requests
@@ -34,14 +34,14 @@ The system SHALL ignore empty lines. On stdin EOF without a prior `shutdown`, th
 - **THEN** the process exits with code 0 and writes no response
 
 ### Requirement: Parse error handling
-The system SHALL respond to malformed JSON with a parse error (`-32700`) using `id` of `null`, and SHALL remain alive to process subsequent requests.
+The system SHALL respond to malformed JSON with a parse error (`-32700`) using `id` of `null`, and SHALL remain alive to process subsequent requests. Input that fails to decode as UTF-8 text, and JSON whose nesting exceeds the interpreter's recursion limit, SHALL likewise yield `-32700` with `id` of `null` while the server remains alive.
 
 #### Scenario: Malformed JSON yields parse error
 - **WHEN** a line containing invalid JSON (e.g. `{not json`) is written
 - **THEN** a `-32700` error with `id: null` is written and the process remains alive for a subsequent valid request
 
 ### Requirement: Invalid request handling
-The system SHALL respond with `-32600` when a line is valid JSON but is not an object, is missing `jsonrpc` or `method`, or has a `jsonrpc` value other than `"2.0"`. The error SHALL use the request `id` if present, otherwise `null`.
+The system SHALL respond with `-32600` when a line is valid JSON but is not an object, is missing `jsonrpc` or `method`, or has a `jsonrpc` value other than `"2.0"`. The error SHALL use the request `id` if present, otherwise `null`. A line exceeding the 16 MiB size bound SHALL be rejected with `-32600` and `id` of `null` without being parsed, and the server SHALL remain alive.
 
 #### Scenario: Missing method field
 - **WHEN** a JSON object without a `method` field is written
@@ -60,7 +60,7 @@ The system SHALL respond with `-32600` when a line is valid JSON but is not an o
 - **THEN** a `-32600` error is written using the request `id` if present, otherwise `null`
 
 ### Requirement: Method not found
-The system SHALL respond to an unknown method with `-32601` and message `Method not found: <method>`.
+The system SHALL respond to an unknown method with `-32601` and message `Method not found: <method>`. The echoed method name SHALL be truncated to 64 characters.
 
 #### Scenario: Unknown method
 - **WHEN** a request with an unrecognized method name is written

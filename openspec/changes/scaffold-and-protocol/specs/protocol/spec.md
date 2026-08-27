@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: JSON-RPC envelope types
-The system SHALL define stdlib `dataclasses` for the JSON-RPC 2.0 envelope: `JsonRpcRequest` (`jsonrpc`, `id`, `method`, `params`), `JsonRpcSuccess` (`jsonrpc`, `id`, `result`), `JsonRpcErrorBody` (`code`, `message`, `data`), and `JsonRpcError` (`jsonrpc`, `id`, `error`). `id` SHALL be `int | str | None`; `params` SHALL be `dict | None`. Per protocol v1.1.0, Gaze emits named (object) params only — array/positional params are out of contract for this change. Requests with no `id` are JSON-RPC 2.0 notifications; Gaze's v1.1.0 lifecycle always supplies an `id`, so notifications are out of contract for this change. A non-object `params` that nonetheless arrives SHALL yield `-32602` in the `initialize` handler (validation is deferred to the handler, not enforced at envelope deserialization).
+The system SHALL define stdlib `dataclasses` for the JSON-RPC 2.0 envelope: `JsonRpcRequest` (`jsonrpc`, `id`, `method`, `params`), `JsonRpcSuccess` (`jsonrpc`, `id`, `result`), `JsonRpcErrorBody` (`code`, `message`, `data`), and `JsonRpcError` (`jsonrpc`, `id`, `error`). `id` SHALL be `int | str | None`; `params` SHALL be `dict | None`. Per protocol v1.1.0, Gaze emits named (object) params only — array/positional params are out of contract for this change. Requests with no `id` are JSON-RPC 2.0 notifications; Gaze's v1.1.0 lifecycle always supplies an `id`, so notifications are out of contract for this change. A non-object `params` that nonetheless arrives SHALL yield `-32602` in the `initialize` handler (validation is deferred to the handler, not enforced at envelope deserialization). Only string and integer `id` values are echoed; any other `id` value (boolean, fractional number, array, object) is treated as absent and answered with `id: null`.
 
 #### Scenario: Request and response round-trip
 - **WHEN** a `JsonRpcRequest` with `id`, `method`, and `params` is serialized
@@ -27,7 +27,7 @@ The system SHALL define named constants for the JSON-RPC 2.0 standard error code
 - **THEN** `PARSE_ERROR` equals `-32700`, `INVALID_REQUEST` equals `-32600`, `METHOD_NOT_FOUND` equals `-32601`, `INVALID_PARAMS` equals `-32602`, and `INTERNAL_ERROR` equals `-32603`
 
 ### Requirement: initialize request schema
-The system SHALL accept an `initialize` request whose `params` is a JSON object containing `root_path` (string, required, the absolute project root) and optionally `config` (object, the opaque `.gaze.yaml` config whose contents are ignored). A missing or `{}` `config` SHALL be accepted. If `params` is absent, is not an object (e.g. an array), or lacks a string `root_path`, the system SHALL respond with `INVALID_PARAMS` (`-32602`).
+The system SHALL accept an `initialize` request whose `params` is a JSON object containing `root_path` (string, required; the absolute project root — path form is not validated in this change) and optionally `config` (object, the opaque `.gaze.yaml` config whose contents are ignored). A missing or `{}` `config` SHALL be accepted. If `params` is absent, is not an object (e.g. an array), or lacks a string `root_path`, the system SHALL respond with `INVALID_PARAMS` (`-32602`).
 
 #### Scenario: initialize accepts required root_path
 - **WHEN** an `initialize` request is sent with `params: {"root_path": "/abs/project", "config": {}}`

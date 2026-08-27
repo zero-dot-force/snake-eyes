@@ -48,6 +48,7 @@ def test_falsy_id_round_trips_unchanged() -> None:
     zero = to_dict(JsonRpcSuccess(0, {}))
     string_id = to_dict(JsonRpcSuccess("abc", {}))
     assert zero["id"] == 0
+    assert not isinstance(zero["id"], bool)
     assert string_id["id"] == "abc"
 
 

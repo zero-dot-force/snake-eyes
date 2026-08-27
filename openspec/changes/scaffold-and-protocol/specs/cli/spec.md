@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Package scaffold and entry point
-The system SHALL provide a `snake-eyes` package installable via `uv sync`, with `pyproject.toml` declaring name `snake-eyes`, version `0.1.0`, `requires-python >=3.11`, `license Apache-2.0`, `src/` layout, and a `snake-eyes` script entry pointing to `snake_eyes.__main__:main`. `src/snake_eyes/__init__.py` SHALL expose `__version__ = "0.1.0"`.
+The system SHALL provide a `snake-eyes` package installable via `uv sync`, with `pyproject.toml` declaring name `snake-eyes`, a dynamic version single-sourced from `src/snake_eyes/__init__.py` (resolving to `0.1.0`), `requires-python >=3.11`, `license Apache-2.0`, `src/` layout, and a `snake-eyes` script entry pointing to `snake_eyes.__main__:main`. `src/snake_eyes/__init__.py` SHALL expose `__version__ = "0.1.0"`.
 
 #### Scenario: Package metadata is correct
 - **WHEN** `pyproject.toml` is inspected
-- **THEN** name is `snake-eyes`, version is `0.1.0`, `requires-python` is `>=3.11`, and license is `Apache-2.0`
+- **THEN** name is `snake-eyes`, the version resolves to `0.1.0` from `src/snake_eyes/__init__.py` via `dynamic = ["version"]`, `requires-python` is `>=3.11`, and license is `Apache-2.0`
 
 #### Scenario: Version constant is exposed
 - **WHEN** `snake_eyes.__version__` is read

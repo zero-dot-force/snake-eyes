@@ -1,6 +1,6 @@
 ## 1. Package scaffold
 
-- [x] 1.1 Create `pyproject.toml` (name `snake-eyes`, version `0.1.0`, `requires-python >=3.11`, Apache-2.0, `src/` layout, dev deps `pytest`/`pytest-cov`/`mypy`/`ruff` under `[dependency-groups] dev`, `snake-eyes = "snake_eyes.__main__:main"` entry, ruff line-length 88, mypy strict, testpaths `tests`, cov fail-under 85) and commit the generated `uv.lock` for reproducible CI
+- [x] 1.1 Create `pyproject.toml` (name `snake-eyes`, dynamic version `0.1.0` single-sourced from `__init__.py` via `[tool.hatch.version]`, `requires-python >=3.11`, Apache-2.0, `src/` layout, dev deps `pytest`/`pytest-cov`/`mypy`/`ruff` under `[dependency-groups] dev`, `snake-eyes = "snake_eyes.__main__:main"` entry, ruff line-length 88, mypy strict, testpaths `tests`, cov fail-under 85 with branch coverage) and commit the generated `uv.lock` for reproducible CI
 - [x] 1.2 Create `src/snake_eyes/__init__.py` with `__version__ = "0.1.0"`
 - [x] 1.3 Create `NOTICE` with the exact attribution content specified in `specs/cli/spec.md`
 
@@ -10,7 +10,7 @@
 - [x] 2.2 Add standard error code constants (`PARSE_ERROR`, `INVALID_REQUEST`, `METHOD_NOT_FOUND`, `INVALID_PARAMS`, `INTERNAL_ERROR`)
 - [x] 2.3 Implement `initialize` request/result construction (`analyzer_name`, `language`, `language_version` from `sys.version_info`, `protocol_version = "1.1.0"`, four `false` capability flags)
 - [x] 2.4 Implement `shutdown` result (`{}`)
-- [x] 2.5 Implement serialization via `dataclasses.asdict` + `json.dumps` with the `data`-omitted-when-`None` rule
+- [x] 2.5 Implement serialization via a recursive `to_dict` helper + `json.dumps` with the `data`-omitted-when-`None` rule
 
 ## 3. Server loop
 

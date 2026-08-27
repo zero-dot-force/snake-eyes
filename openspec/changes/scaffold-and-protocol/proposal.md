@@ -39,4 +39,4 @@ None.
 - **I. Protocol Fidelity** — Implemented directly: exact v1.1.0 handshake (`protocol_version = "1.1.0"`), exact envelope/result field names, the standard JSON-RPC error taxonomy, and `data`-omission serialization, all pinned by tests.
 - **II. Detection Accuracy** — N/A: no analysis/detection code is introduced in this change (scaffold + `initialize`/`shutdown` lifecycle only).
 - **III. Python-Native Analysis** — N/A: no analysis/detection code is introduced in this change.
-- **IV. Testability** — The coverage strategy is implemented now, not deferred: 100% unit targets for `protocol.py`, `server.py`, and `__main__.py`, and the 85% aggregate gate enforced in CI.
+- **IV. Testability** — The coverage strategy is implemented now, not deferred: effectively 100% statement-and-branch coverage of `protocol.py`, `server.py`, and `__main__.py`; the enforced governance gate is the 85% aggregate (`--cov-fail-under=85`, branch coverage enabled).

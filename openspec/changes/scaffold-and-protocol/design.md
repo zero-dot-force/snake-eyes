@@ -23,8 +23,8 @@ Constitution I (Protocol Fidelity) requires every JSON-RPC response to match the
 1. **Transport is line-delimited JSON, not LSP Content-Length headers.**
    One JSON object per line over stdin/stdout. This matches Gaze protocol v1.1.0 and keeps the server trivially streamable. Alternative (LSP framing) rejected: the protocol spec mandates line-delimited JSON.
 
-2. **Stdlib `dataclasses` for protocol types, serialized via `dataclasses.asdict` + `json.dumps`.**
-   No pydantic. The envelope is small and fixed; a serialization dependency buys nothing at this scope and violates the "prefer stdlib" default. `asdict` with an explicit filter omits the optional error `data` key when `None` (the protocol forbids emitting `null` for omitted fields).
+2. **Stdlib `dataclasses` for protocol types, serialized via a recursive `to_dict` helper + `json.dumps`.**
+   No pydantic. The envelope is small and fixed; a serialization dependency buys nothing at this scope and violates the "prefer stdlib" default. `to_dict` is equivalent to `dataclasses.asdict` plus a `None`-`data` omission filter (plain `asdict` cannot omit a key). The protocol forbids emitting `null` for omitted fields.
 
 3. **Server reads `sys.stdin`/writes `sys.stdout` and accepts injected streams plus an injectable dispatch table.**
    A `Server` object takes `stdin`/`stdout`/`stderr` as constructor args so tests can inject `io.StringIO` and drive the loop deterministically. It also accepts an injectable dispatch table (method name → handler callable), defaulting to the built-in `initialize`/`shutdown` table, so a test can register a raising handler to exercise the `-32603` internal-error path through stdin/stdout. This satisfies the "drive through stdin/stdout, not private helpers" test mandate. The broken-pipe test injects a minimal stub whose `write` raises `BrokenPipeError` (not `io.StringIO`, which cannot raise).
@@ -36,7 +36,7 @@ Constitution I (Protocol Fidelity) requires every JSON-RPC response to match the
    `-32700` parse error (id `null`), `-32600` invalid request, `-32601` method not found, `-32602` invalid params (fired when `initialize` `params` is absent, non-object, or lacks a string `root_path`), `-32603` internal error. On handler exception, write `-32603` with the message and log tracebacks only to stderr (stdout is the protocol channel).
 
 6. **`initialize` is idempotent; `shutdown` exits 0 after ack.**
-   A second `initialize` returns a valid result. `shutdown` writes `{}` then the process exits 0. Empty lines are ignored; stdin EOF without `shutdown` exits 0 silently. Exit codes are surfaced as `SystemExit` raised in-process (the server loop raises `SystemExit(0)` after `shutdown`/EOF and `main()` propagates it); tests catch `SystemExit` from injected streams rather than spawning a subprocess.
+   A second `initialize` returns a valid result. `shutdown` writes `{}` then the process exits 0. Empty and whitespace-only lines are ignored; stdin EOF without `shutdown` exits 0 silently. Exit codes are surfaced as `SystemExit` raised in-process (the server loop raises `SystemExit(0)` after `shutdown`/EOF and `main()` propagates it); tests primarily catch `SystemExit` from injected streams, with two subprocess smoke tests pinning the real process-boundary behavior.
 
 7. **`--stdio` is the only CLI flag.**
    With `--stdio`, start the server and block. Without it, print `snake-eyes --stdio` to stderr and exit 2. No config files, no subcommands. `main(argv=None, *, stdin=None, stdout=None, stderr=None)` defaults each to `sys.*`, mirroring the `Server` seam so tests drive the entry point in-process.
@@ -44,9 +44,12 @@ Constitution I (Protocol Fidelity) requires every JSON-RPC response to match the
 8. **CI: `astral-sh/setup-uv` + `uv sync --locked`, matrix 3.11/3.12, four gates.**
    `ruff check`, `ruff format --check`, `mypy src/` (strict), and `pytest --cov=snake_eyes --cov-fail-under=85`. The 85% gate is a governance value and is not lowered. The `astral-sh/setup-uv` action SHALL be pinned to a full commit SHA (tag recorded as a trailing comment) for supply-chain integrity, and the workflow SHALL declare an explicit `permissions: contents: read` block (least privilege).
 
+9. **Transport hardening bounds: 16 MiB line cap, 64-char method echo, UTF-8 streams.**
+   Request lines longer than 16 MiB (`MAX_LINE_CHARS`) are rejected `-32600` before parsing; deeply nested JSON (`RecursionError`) and undecodable bytes (`UnicodeDecodeError`) yield `-32700` while the loop stays alive; the `-32601` method echo is truncated to 64 characters (`MAX_METHOD_ECHO`). Real stdio text streams are reconfigured to UTF-8 (stdout with `\n` newlines) so the protocol channel is locale-independent. On an output-pipe failure (`OSError`, e.g. EPIPE), the real process stdout is redirected to `os.devnull` before `SystemExit(0)` so interpreter finalization cannot re-flush the broken pipe — a finalization error can exit 120 on Python 3.12+.
+
 ## Risks / Trade-offs
 
 - [Protocol drift vs. Gaze v1.1.0] → Pin `protocol_version` to the literal `"1.1.0"` and assert it in tests; keep the envelope field names verbatim from the issue.
 - [stdlib-only serialization omits `data` incorrectly] → Centralize in one `to_dict` helper with a `None`-omission rule and unit-test the exact JSON output.
 - [stdout contamination from tracebacks] → Route all diagnostics to stderr; tests assert stdout contains only protocol JSON.
-- [Coverage gate vs. small surface area] → `__main__.py`, `protocol.py`, and `server.py` each have explicit 100% unit targets so the aggregate 85% gate is comfortably met.
+- [Coverage gate vs. small surface area] → `__main__.py`, `protocol.py`, and `server.py` are covered at effectively 100% (statements and branches); the enforced governance gate is the aggregate `--cov-fail-under=85`.
