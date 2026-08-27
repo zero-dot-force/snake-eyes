@@ -226,6 +226,7 @@ __marimo__/
 .uf/dewey/graph.db-wal
 .uf/dewey/*.lock
 .uf/dewey/cache/
+.uf/dewey/learnings/
 .uf/dewey/dewey.log
 .uf/replicator/*.db
 .uf/replicator/*.db-shm

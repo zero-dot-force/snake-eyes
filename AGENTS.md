@@ -62,20 +62,16 @@ snake-eyes/
 │   ├── __init__.py
 │   ├── __main__.py          # Entry point (snake-eyes --stdio)
 │   ├── server.py            # JSON-RPC server (stdin/stdout)
-│   ├── protocol.py          # Request/response types
-│   ├── discovery.py         # File discovery (source + tests)
-│   ├── analysis/
-│   │   ├── __init__.py
-│   │   ├── detector.py      # Side effect detection
-│   │   ├── inference.py     # Name/type resolution (astroid)
-│   │   ├── effects.py       # Effect type definitions
-│   │   └── patterns.py      # Known I/O and mutation patterns
-│   ├── complexity.py        # Cyclomatic complexity (radon)
-│   └── coverage.py          # coverage.py data parsing
+│   └── protocol.py          # Request/response types
 ├── tests/
+├── .github/workflows/       # CI: ruff, mypy, pytest gates
 ├── pyproject.toml
-└── .gaze.yaml
+├── uv.lock
+├── README.md
+├── LICENSE
+└── NOTICE
 ```
+Planned later: `discovery.py`, `analysis/`, `complexity.py`, `coverage.py` (issues #3–#6).
 
 ## Shell Commands
 
