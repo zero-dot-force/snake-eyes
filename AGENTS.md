@@ -72,11 +72,11 @@ subprocess. The division of responsibility:
   AST analysis
 - **Scope analysis**: Python `symtable` module (stdlib) for
   global/nonlocal detection
-- **Inference**: [Astroid](https://github.com/pylint-dev/astroid)
+- **Inference** (planned): [Astroid](https://github.com/pylint-dev/astroid)
   for name resolution, type inference, cross-module imports
-- **Complexity**: [radon](https://github.com/rubik/radon)
+- **Complexity** (planned): [radon](https://github.com/rubik/radon)
   for cyclomatic complexity
-- **Coverage**: [coverage.py](https://github.com/nedbat/coveragepy)
+- **Coverage** (planned): [coverage.py](https://github.com/nedbat/coveragepy)
   for parsing coverage data
 - **Project management**: [uv](https://docs.astral.sh/uv/)
 - **Testing**: [pytest](https://docs.pytest.org/)
@@ -89,7 +89,12 @@ snake-eyes/
 │   ├── __init__.py
 │   ├── __main__.py          # Entry point (snake-eyes --stdio)
 │   ├── server.py            # JSON-RPC server (stdin/stdout)
-│   └── protocol.py          # Request/response types
+│   ├── protocol.py          # Request/response types
+│   ├── discovery.py         # File discovery (os.walk)
+│   └── analysis/
+│       ├── __init__.py
+│       ├── effects.py       # 48-type SideEffectType taxonomy
+│       └── models.py        # Effect / FunctionRecord data models
 ├── tests/
 ├── .github/workflows/       # CI: ruff, mypy, pytest gates
 ├── pyproject.toml
@@ -98,7 +103,7 @@ snake-eyes/
 ├── LICENSE
 └── NOTICE
 ```
-Planned later: `discovery.py`, `analysis/`, `complexity.py`, `coverage.py` (issues #3–#6).
+Planned later: `complexity.py`, `coverage.py` (issues #5–#6).
 
 ## Shell Commands
 

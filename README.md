@@ -7,17 +7,17 @@ Snake Eyes is a Gaze-spawned subprocess. It speaks JSON-RPC 2.0 over stdin/stdou
 
 ## Current status (v0.1.0)
 
-This release is the project scaffold and protocol lifecycle only:
-
 | Method | Status |
 |--------|--------|
 | `initialize` | Implemented |
 | `shutdown` | Implemented |
-| `discover`, `analyze`, `complexity`, `coverage` | Not implemented (`-32601`) |
+| `discover` | Implemented |
+| `analyze`, `complexity`, `coverage` | Not implemented (`-32601`) |
 
-Capability flags advertised at handshake (`discover`, `test_mapping`,
-`classify_signals`, `streaming`) are all `false`. Side-effect detection and
-analysis dependencies (`astroid`, `radon`, `coverage.py`) are later issues.
+Capability flags advertised at handshake: `discover` is `true`;
+`test_mapping`, `classify_signals`, and `streaming` are `false`.
+Side-effect detection and analysis dependencies (`astroid`, `radon`,
+`coverage.py`) are later issues.
 
 ## Installation
 
@@ -49,13 +49,18 @@ snake-eyes/
 │   ├── __init__.py
 │   ├── __main__.py          # Entry point (snake-eyes --stdio)
 │   ├── server.py            # JSON-RPC server (stdin/stdout)
-│   └── protocol.py          # Request/response types
+│   ├── protocol.py          # Request/response types
+│   ├── discovery.py         # File discovery (os.walk)
+│   └── analysis/
+│       ├── __init__.py
+│       ├── effects.py       # 48-type SideEffectType taxonomy
+│       └── models.py        # Effect / FunctionRecord data models
 ├── tests/
 ├── pyproject.toml
 └── NOTICE
 ```
 
-Planned later: file discovery, analysis, complexity, and coverage (issues #3–#6).
+Planned later: analysis engine, complexity, and coverage (issues #4–#6).
 
 ## License
 

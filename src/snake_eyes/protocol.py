@@ -75,8 +75,8 @@ def initialize_result() -> dict[str, Any]:
     Returns a plain dict with the exact keys ``analyzer_name``,
     ``language``, ``language_version`` (from ``sys.version_info``),
     ``protocol_version`` (``"1.1.0"``), and ``capabilities`` with all four
-    flags (``discover``, ``test_mapping``, ``classify_signals``,
-    ``streaming``) present and ``False``.
+    flags present (``discover`` ``True``; ``test_mapping``,
+    ``classify_signals``, and ``streaming`` ``False``).
     """
     major, minor, micro = sys.version_info[:3]
     return {
@@ -85,7 +85,7 @@ def initialize_result() -> dict[str, Any]:
         "language_version": f"{major}.{minor}.{micro}",
         "protocol_version": PROTOCOL_VERSION,
         "capabilities": {
-            "discover": False,
+            "discover": True,
             "test_mapping": False,
             "classify_signals": False,
             "streaming": False,
@@ -126,4 +126,4 @@ def to_json(obj: Any) -> str:
     Returns the compact ``json.dumps`` rendering of ``to_dict(obj)`` -- no
     embedded newlines, suitable for the line-delimited stdio transport.
     """
-    return json.dumps(to_dict(obj))
+    return json.dumps(to_dict(obj), sort_keys=True)
