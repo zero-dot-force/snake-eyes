@@ -9,6 +9,7 @@ import traceback
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
+from .discovery import discover
 from .protocol import (
     INTERNAL_ERROR,
     INVALID_PARAMS,
@@ -57,9 +58,35 @@ def _shutdown(params: dict[str, Any] | None) -> dict[str, Any]:
     return shutdown_result()
 
 
+def _discover(params: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(params, dict):
+        raise RpcError(INVALID_PARAMS, "Invalid params: params must be an object")
+    root_path = params.get("root_path")
+    if not isinstance(root_path, str):
+        raise RpcError(INVALID_PARAMS, "Invalid params: root_path must be a string")
+    patterns_raw = params.get("patterns")
+    if patterns_raw is not None and (
+        not isinstance(patterns_raw, list)
+        or not all(isinstance(pattern, str) for pattern in patterns_raw)
+    ):
+        raise RpcError(
+            INVALID_PARAMS, "Invalid params: patterns must be an array of strings"
+        )
+    patterns: list[str] | None = patterns_raw
+    try:
+        result = discover(root_path, patterns)
+    except FileNotFoundError as err:
+        raise RpcError(INVALID_PARAMS, str(err)) from err
+    return {
+        "source_files": list(result.source_files),
+        "test_files": list(result.test_files),
+    }
+
+
 DEFAULT_DISPATCH: Mapping[str, Handler] = {
     "initialize": _initialize,
     SHUTDOWN_METHOD: _shutdown,
+    "discover": _discover,
 }
 
 

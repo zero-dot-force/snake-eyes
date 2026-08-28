@@ -85,7 +85,7 @@ def test_initialize_result_schema() -> None:
     assert result["language_version"] == f"{major}.{minor}.{micro}"
 
     assert result["capabilities"] == {
-        "discover": False,
+        "discover": True,
         "test_mapping": False,
         "classify_signals": False,
         "streaming": False,

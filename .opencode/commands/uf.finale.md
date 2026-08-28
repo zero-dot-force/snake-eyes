@@ -54,13 +54,13 @@ step. This checklist survives context compression and
 serves as the source of truth for workflow state.
 
 ```
-BRANCH=<set when known>
+BRANCH=opsx/taxonomy-and-discovery
 COMMIT=<set when known>
 PR_NUMBER=<set when known>
 PR_URL=<set when known>
 CONFLICT_OPTION=<set when known>
 
-[ ] Step 1 — Branch Safety Gate
+[x] Step 1 — Branch Safety Gate
 [ ] Step 2 — Check for Changes to Commit
 [ ] Step 3 — Generate and Confirm Commit Message
 [ ] Step 4 — Push to Remote

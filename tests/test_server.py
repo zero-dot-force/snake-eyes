@@ -234,7 +234,6 @@ def test_invalid_params_root_path_wrong_type(root_path: object) -> None:
         "analyze",
         "complexity",
         "coverage",
-        "discover",
         "test_mapping",
         "classify_signals",
         "analyze/stream",

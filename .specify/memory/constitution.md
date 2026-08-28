@@ -1,4 +1,45 @@
+<!--
+SYNC IMPACT REPORT
+Version change: 1.0.0 → 1.1.0
+Amendment date: 2026-08-27
+Feature: Constitution alignment with org patterns
+
+Added sections:
+- parent_constitution declaration (org v1.2.0)
+- Principle V: Analysis Safety (new principle)
+- Determinism MUST rules under Principle I
+- Protocol version pin (v1.1.0) in upgraded Upstream Alignment
+- Conflict Resolution clause in Governance
+- Org supremacy clause in Governance
+- This Sync Impact Report
+
+Modified sections:
+- Principle I: Protocol Fidelity (added determinism rules)
+- Governance: Upstream Alignment (upgraded with version pin
+  and conformance-suite requirement)
+
+Unchanged sections:
+- Principle II: Detection Accuracy
+- Principle III: Python-Native Analysis
+- Principle IV: Testability
+- Development Workflow
+
+Org alignment check: ALIGNED
+- All five existing principles are compatible with org v1.2.0
+- Principle V: Analysis Safety derives from org Principle V
+  (Security by Default) adapted for static analysis context
+
+Template compatibility: constitution v1 template
+
+Version history:
+- 1.0.0 (2026-05-17): Initial ratification. Four principles
+  (Protocol Fidelity, Detection Accuracy, Python-Native
+  Analysis, Testability). Upstream Alignment clause.
+-->
+
 # Snake Eyes Constitution
+
+**parent_constitution**: unbound-force/unbound-force v1.2.0
 
 ## Core Principles
 
@@ -17,6 +58,12 @@ every language analyzer -- deviations break the platform.
 - When the protocol evolves (new methods, new fields),
   Snake Eyes MUST maintain backward compatibility with
   older Gaze versions through capability negotiation.
+- Analysis of the same input tree with the same Snake Eyes
+  version and the same protocol version MUST produce
+  byte-identical JSON-RPC output. Responses MUST NOT
+  contain timestamps, random values, hostnames, or any
+  other environment-dependent data. JSON serialization
+  MUST be deterministic (stable key ordering).
 
 **Rationale**: Snake Eyes is not a standalone tool. It is
 one half of a two-process system. If the protocol contract
@@ -103,6 +150,36 @@ a practical necessity: the JSON-RPC boundary provides a
 clean seam for integration testing without requiring a
 running Gaze process.
 
+### V. Analysis Safety
+
+Snake Eyes analyzes arbitrary Python codebases. Analyzed
+source code is untrusted input and MUST be treated as such.
+
+- Analysis MUST be strictly static. Snake Eyes MUST NOT
+  execute, import, or otherwise run analyzed code. All
+  inspection MUST use parse-level tools (`ast.parse`,
+  `symtable.symtable`, Astroid's AST inference) that do
+  not trigger code execution.
+- Inputs MUST be validated and bounded. File paths MUST be
+  resolved and checked for traversal. Resource limits
+  (file size, AST depth, recursion budget) MUST prevent
+  analyzed code from causing denial of service.
+- Every dependency is attack surface. The default answer
+  to adding a dependency is "do not add." Current
+  dependencies (astroid, radon, coverage.py) are justified
+  as established, maintained libraries that provide
+  capabilities impractical to reimplement. New dependencies
+  MUST be justified against this standard.
+- CI actions MUST be pinned by commit SHA, not by mutable
+  tag. Supply-chain integrity is a structural property,
+  not a per-change review item.
+
+**Rationale**: Snake Eyes runs in developer and CI
+environments on codebases it does not control. A
+compromised or malicious project must not achieve code
+execution through the analyzer. Static-only analysis is
+not a limitation -- it is the security boundary.
+
 ## Development Workflow
 
 - **Spec-First Development**: All changes that modify
@@ -136,6 +213,11 @@ running Gaze process.
 
 ## Governance
 
+This constitution extends the unbound-force org constitution
+(v1.2.0). On matters where this document and the org
+constitution conflict, the org constitution prevails and
+this constitution MUST be amended to resolve the conflict.
+
 This constitution is the highest-authority document for the
 Snake Eyes project. All development practices, pull request
 reviews, and architectural decisions MUST be consistent with
@@ -155,9 +237,18 @@ the principles defined above.
   plan, tasks), the Constitution Check gate MUST verify
   that the proposed work aligns with all active principles.
 - **Upstream Alignment**: This constitution is subordinate
-  to Gaze's analyzer protocol specification. If a
-  constitutional principle conflicts with the protocol
-  spec, the protocol spec takes precedence and the
-  constitution MUST be amended.
+  to Gaze's analyzer protocol specification. Snake Eyes
+  implements **protocol v1.1.0** (defined at
+  `unbound-force/gaze/docs/protocol.md`). Protocol
+  conformance MUST be verified by an automated conformance
+  suite (canned request/response pairs validated against
+  the protocol schema). When Gaze bumps the protocol
+  version, Snake Eyes MUST open an alignment issue within
+  one release cycle.
+- **Conflict Resolution**: When two principles appear to
+  conflict in a specific scenario, the tradeoff MUST be
+  explicitly documented in the relevant spec or plan. No
+  principle has implicit priority over another; resolution
+  is context-dependent and requires written justification.
 
-**Version**: 1.0.0 | **Ratified**: 2026-05-17 | **Last Amended**: 2026-05-17
+**Version**: 1.1.0 | **Ratified**: 2026-05-17 | **Last Amended**: 2026-08-27
