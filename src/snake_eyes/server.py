@@ -9,6 +9,10 @@ import traceback
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
+from .analysis.complexity import compute_complexity
+from .analysis.detector import analyze_path
+from .analysis.models import function_record_to_dict
+from .coverage import parse_coverage
 from .discovery import discover
 from .protocol import (
     INTERNAL_ERROR,
@@ -83,10 +87,61 @@ def _discover(params: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _validate_analysis_params(
+    params: dict[str, Any] | None,
+) -> tuple[str, list[str] | None]:
+    """Validate shared {root_path, patterns} params; raise RpcError on bad input."""
+    if not isinstance(params, dict):
+        raise RpcError(INVALID_PARAMS, "Invalid params: params must be an object")
+    root_path = params.get("root_path")
+    if not isinstance(root_path, str):
+        raise RpcError(INVALID_PARAMS, "Invalid params: root_path must be a string")
+    patterns_raw = params.get("patterns")
+    if patterns_raw is not None and (
+        not isinstance(patterns_raw, list)
+        or not all(isinstance(p, str) for p in patterns_raw)
+    ):
+        raise RpcError(
+            INVALID_PARAMS, "Invalid params: patterns must be an array of strings"
+        )
+    patterns: list[str] | None = patterns_raw
+    return root_path, patterns
+
+
+def _analyze(params: dict[str, Any] | None) -> dict[str, Any]:
+    root_path, patterns = _validate_analysis_params(params)
+    try:
+        records = analyze_path(root_path, patterns)
+    except FileNotFoundError as err:
+        raise RpcError(INVALID_PARAMS, str(err)) from err
+    return {"functions": [function_record_to_dict(r) for r in records]}
+
+
+def _complexity(params: dict[str, Any] | None) -> dict[str, Any]:
+    root_path, patterns = _validate_analysis_params(params)
+    try:
+        entries = compute_complexity(root_path, patterns)
+    except FileNotFoundError as err:
+        raise RpcError(INVALID_PARAMS, str(err)) from err
+    return {"functions": entries}
+
+
+def _coverage(params: dict[str, Any] | None) -> dict[str, Any]:
+    root_path, patterns = _validate_analysis_params(params)
+    try:
+        entries = parse_coverage(root_path, patterns)
+    except FileNotFoundError as err:
+        raise RpcError(INVALID_PARAMS, str(err)) from err
+    return {"functions": entries}
+
+
 DEFAULT_DISPATCH: Mapping[str, Handler] = {
     "initialize": _initialize,
     SHUTDOWN_METHOD: _shutdown,
     "discover": _discover,
+    "analyze": _analyze,
+    "complexity": _complexity,
+    "coverage": _coverage,
 }
 
 

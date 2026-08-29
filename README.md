@@ -12,12 +12,16 @@ Snake Eyes is a Gaze-spawned subprocess. It speaks JSON-RPC 2.0 over stdin/stdou
 | `initialize` | Implemented |
 | `shutdown` | Implemented |
 | `discover` | Implemented |
-| `analyze`, `complexity`, `coverage` | Not implemented (`-32601`) |
+| `analyze` | Implemented |
+| `complexity` | Implemented |
+| `coverage` | Implemented |
 
 Capability flags advertised at handshake: `discover` is `true`;
 `test_mapping`, `classify_signals`, and `streaming` are `false`.
-Side-effect detection and analysis dependencies (`astroid`, `radon`,
-`coverage.py`) are later issues.
+Side-effect detection is implemented. `coverage.py>=7.0,<8` is a
+runtime dependency (shipped). Astroid (name inference) is planned for
+a later issue. `radon` is not used — cyclomatic complexity is computed
+via a lifted McCabe implementation (no radon dependency).
 
 ## Installation
 
@@ -51,16 +55,22 @@ snake-eyes/
 │   ├── server.py            # JSON-RPC server (stdin/stdout)
 │   ├── protocol.py          # Request/response types
 │   ├── discovery.py         # File discovery (os.walk)
+│   ├── coverage.py          # Coverage data parser (coverage.json / .coverage)
 │   └── analysis/
 │       ├── __init__.py
+│       ├── _shared.py       # Shared helpers (safe file reader, package derivation)
 │       ├── effects.py       # 48-type SideEffectType taxonomy
-│       └── models.py        # Effect / FunctionRecord data models
+│       ├── models.py        # Effect / FunctionRecord data models
+│       ├── detector.py      # Python side-effect detector (analyze method)
+│       └── complexity.py    # McCabe cyclomatic complexity (complexity method)
 ├── tests/
 ├── pyproject.toml
 └── NOTICE
 ```
 
-Planned later: analysis engine, complexity, and coverage (issues #4–#6).
+Delivered in issue #4: `detector.py`, `complexity.py`, `coverage.py`, `_shared.py`,
+and the `analyze`, `complexity`, and `coverage` JSON-RPC methods.
+Planned later: astroid-based name inference.
 
 ## License
 
