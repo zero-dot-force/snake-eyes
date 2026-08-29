@@ -231,9 +231,7 @@ def test_invalid_params_root_path_wrong_type(root_path: object) -> None:
 @pytest.mark.parametrize(
     "method",
     [
-        "analyze",
-        "complexity",
-        "coverage",
+        # analyze/complexity/coverage are now implemented (return -32602 without params)
         "test_mapping",
         "classify_signals",
         "analyze/stream",

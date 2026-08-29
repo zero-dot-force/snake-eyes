@@ -62,7 +62,7 @@ subprocess. The division of responsibility:
 - Python-specific side effect detection
 - Python-specific classification signals
 - Coverage data parsing (coverage.py)
-- Cyclomatic complexity calculation (radon)
+- Cyclomatic complexity calculation (lifted gaze-py McCabe; no radon)
 - Test-to-assertion mapping (pytest)
 - File and project discovery
 
@@ -74,10 +74,9 @@ subprocess. The division of responsibility:
   global/nonlocal detection
 - **Inference** (planned): [Astroid](https://github.com/pylint-dev/astroid)
   for name resolution, type inference, cross-module imports
-- **Complexity** (planned): [radon](https://github.com/rubik/radon)
-  for cyclomatic complexity
-- **Coverage** (planned): [coverage.py](https://github.com/nedbat/coveragepy)
-  for parsing coverage data
+- **Complexity**: lifted gaze-py McCabe implementation; no radon dependency
+- **Coverage**: [coverage.py](https://github.com/nedbat/coveragepy) `>=7.0,<8`
+  (shipped runtime dependency) for parsing `.coverage` data files
 - **Project management**: [uv](https://docs.astral.sh/uv/)
 - **Testing**: [pytest](https://docs.pytest.org/)
 
@@ -91,10 +90,14 @@ snake-eyes/
 │   ├── server.py            # JSON-RPC server (stdin/stdout)
 │   ├── protocol.py          # Request/response types
 │   ├── discovery.py         # File discovery (os.walk)
+│   ├── coverage.py          # Coverage data parser (coverage.json / .coverage)
 │   └── analysis/
 │       ├── __init__.py
+│       ├── _shared.py       # Shared helpers (safe file reader, package derivation)
 │       ├── effects.py       # 48-type SideEffectType taxonomy
-│       └── models.py        # Effect / FunctionRecord data models
+│       ├── models.py        # Effect / FunctionRecord data models
+│       ├── detector.py      # Python side-effect detector (analyze method)
+│       └── complexity.py    # McCabe cyclomatic complexity (complexity method)
 ├── tests/
 ├── .github/workflows/       # CI: ruff, mypy, pytest gates
 ├── pyproject.toml
@@ -103,7 +106,7 @@ snake-eyes/
 ├── LICENSE
 └── NOTICE
 ```
-Planned later: `complexity.py`, `coverage.py` (issues #5–#6).
+Delivered in issue #4: `detector.py`, `complexity.py`, `coverage.py`, `_shared.py`.
 
 ## Shell Commands
 

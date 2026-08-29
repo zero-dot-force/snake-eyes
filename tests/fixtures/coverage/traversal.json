@@ -1,0 +1,20 @@
+{
+  "meta": {"version": "7.0.0"},
+  "files": {
+    "../../etc/passwd": {
+      "executed_lines": [1],
+      "missing_lines": [],
+      "excluded_lines": []
+    },
+    "/etc/shadow": {
+      "executed_lines": [1],
+      "missing_lines": [],
+      "excluded_lines": []
+    },
+    "tests/fixtures/coverage/sample_module.py": {
+      "executed_lines": [4, 5],
+      "missing_lines": [8, 9],
+      "excluded_lines": []
+    }
+  }
+}

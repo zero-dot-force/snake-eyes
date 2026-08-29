@@ -486,6 +486,9 @@ wheels = [
 [[package]]
 name = "snake-eyes"
 source = { editable = "." }
+dependencies = [
+    { name = "coverage" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -496,6 +499,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "coverage", specifier = ">=7.0,<8" }]
 
 [package.metadata.requires-dev]
 dev = [

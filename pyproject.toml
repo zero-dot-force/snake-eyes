@@ -5,7 +5,7 @@ description = "Python side-effect analyzer backend for Gaze (JSON-RPC 2.0 extern
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-dependencies = []
+dependencies = ["coverage>=7.0,<8"]
 
 [project.scripts]
 snake-eyes = "snake_eyes.__main__:main"
@@ -31,9 +31,16 @@ packages = ["src/snake_eyes"]
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+exclude = [
+    "tests/fixtures/effects/syntax_error.py",
+    "tests/fixtures/coverage/syntax_error.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/fixtures/**" = ["E501", "F401", "I001", "UP", "E999"]
 
 [tool.mypy]
 strict = true
