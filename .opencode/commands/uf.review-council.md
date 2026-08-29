@@ -21,22 +21,37 @@ description: Run the reviewer governance council to audit codebase or spec compl
 > **EXECUTION CHECKLIST** — Update each item using the
 > Edit tool as you complete it. Mark `[x]` when done.
 >
-> - [x] Phase 1a: Pre-flight checks
-> - [x] Phase 1b: Gaze quality analysis
-> - [x] Phase 1c: Review context discovery
-> - [x] Step 2: Divisor agent delegation (full branch diff)
-> - [x] Step 3: Finding consolidation
-> - [x] Step 4: Fix loop (iteration: 1/3)
-> - [x] Step 5: Iteration limit check
-> - [x] Step 6: Final report
-> - [x] Step 7a: PR detection — no open PR found, skipping 7b-7g
-> - [ ] Step 7b: Review state fetching (skipped)
-> - [ ] Step 7c: Pre-posting checks (skipped)
-> - [ ] Step 7d: Finding aggregation (skipped)
-> - [ ] Step 7e: Inline comment preparation (skipped)
-> - [ ] Step 7f: Human confirmation (MANDATORY GATE) (skipped)
-> - [ ] Step 7g: Post review (skipped)
+> - [ ] Phase 1a: Pre-flight checks
+> - [ ] Phase 1b: Gaze quality analysis
+> - [ ] Phase 1c: Review context discovery
+> - [ ] Step 2: Divisor agent delegation (full branch diff)
+> - [ ] Step 3: Finding consolidation
+> - [ ] Step 4: Fix loop (iteration: _/3)
+> - [ ] Step 5: Iteration limit check
+> - [ ] Step 6: Final report
+> - [ ] Step 7a: PR detection
+> - [ ] Step 7b: Review state fetching
+> - [ ] Step 7c: Pre-posting checks
+> - [ ] Step 7d: Finding aggregation
+> - [ ] Step 7e: Inline comment preparation
+> - [ ] Step 7f: Human confirmation (MANDATORY GATE)
+> - [ ] Step 7g: Post review
 
+### TodoWrite Progress Tracking
+
+Use the **TodoWrite tool** for live session visibility.
+At pipeline start, initialize TodoWrite with all checklist
+items (Phase 1a, Phase 1b, Phase 1c, Steps 2-6,
+Steps 7a-7g) as `pending`. Before starting each item,
+mark it `in_progress`. After completing each item, mark
+it `completed`. This runs alongside the Edit tool
+execution checklist — both MUST be maintained.
+
+On resume from compressed context, re-initialize the
+TodoWrite list from the execution checklist state: items
+marked `[x]` become `completed`, the first unchecked item
+becomes `in_progress`, and remaining unchecked items
+become `pending`.
 
 ## User Input
 

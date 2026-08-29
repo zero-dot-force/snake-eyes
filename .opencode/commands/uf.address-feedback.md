@@ -1,8 +1,8 @@
 ---
 description: "Triage and address PR review feedback with structured assessment"
 ---
-<!-- scaffolded by uf vdev -->
 
+<!-- scaffolded by uf vdev -->
 
 # Address Feedback
 
@@ -57,6 +57,22 @@ of progress.
 Replace `_N_`, `_M_`, etc. with actual counts as you
 progress. Mark each line `[x]` when the phase completes.
 
+### TodoWrite Progress Tracking
+
+Use the **TodoWrite tool** for live session visibility.
+At pipeline start, initialize TodoWrite with all phases
+and sub-steps (Phase 1, Phase 2, Phase 3, Phase 4.1,
+Phase 4.2, Phase 4.3, Phase 4.4, Phase 4.5) as `pending`.
+Before starting each phase/sub-step, mark it `in_progress`.
+After completing each phase/sub-step, mark it `completed`.
+This runs alongside the Edit tool execution checklist —
+both MUST be maintained.
+
+On resume from compressed context, re-initialize the
+TodoWrite list from the execution checklist state: items
+marked `[x]` become `completed`, the first unchecked item
+becomes `in_progress`, and remaining unchecked items
+become `pending`.
 
 ---
 

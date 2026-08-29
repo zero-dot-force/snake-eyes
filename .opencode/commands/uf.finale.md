@@ -54,13 +54,13 @@ step. This checklist survives context compression and
 serves as the source of truth for workflow state.
 
 ```
-BRANCH=opsx/taxonomy-and-discovery
+BRANCH=<set when known>
 COMMIT=<set when known>
 PR_NUMBER=<set when known>
 PR_URL=<set when known>
 CONFLICT_OPTION=<set when known>
 
-[x] Step 1 — Branch Safety Gate
+[ ] Step 1 — Branch Safety Gate
 [ ] Step 2 — Check for Changes to Commit
 [ ] Step 3 — Generate and Confirm Commit Message
 [ ] Step 4 — Push to Remote
@@ -78,6 +78,21 @@ After completing each step, use the Edit tool to:
 If resuming from compressed context, re-read this
 checklist to determine which steps are complete and
 what state is available.
+
+### TodoWrite Progress Tracking
+
+Use the **TodoWrite tool** for live session visibility.
+At pipeline start, initialize TodoWrite with all 8 steps
+(Steps 1-8) as `pending`. Before starting each step,
+mark it `in_progress`. After completing each step, mark
+it `completed`. This runs alongside the Edit tool
+execution checklist — both MUST be maintained.
+
+On resume from compressed context, re-initialize the
+TodoWrite list from the execution checklist state: steps
+marked `[x]` become `completed`, the first unchecked step
+becomes `in_progress`, and remaining unchecked steps
+become `pending`.
 
 ### 1. Branch Safety Gate
 

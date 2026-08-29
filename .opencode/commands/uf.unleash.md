@@ -61,6 +61,21 @@ off on re-run.
 - [ ] Step 10: Demo (Step 8)
 ```
 
+### TodoWrite Progress Tracking
+
+Use the **TodoWrite tool** for live session visibility.
+At pipeline start, initialize TodoWrite with all 11 steps
+(Steps 0-10) as `pending`. Before starting each step,
+mark it `in_progress`. After completing each step, mark
+it `completed`. This runs alongside the Edit tool
+execution checklist — both MUST be maintained.
+
+On resume from compressed context, re-initialize the
+TodoWrite list from the execution checklist state: steps
+marked `[x]` become `completed`, the first unchecked step
+becomes `in_progress`, and remaining unchecked steps
+become `pending`.
+
 ### 0. Startup Cleanup
 
 Before any pipeline logic, clean up stale worktrees from
