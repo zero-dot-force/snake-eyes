@@ -20,7 +20,7 @@ The `analyze` method SHALL accept a `params` object with a required string `root
 - **THEN** a `-32602` error is returned
 
 ### Requirement: analyze result schema
-The `analyze` method SHALL return a result object with a `functions` array. Each function SHALL carry `name`, `package`, `file`, `line`, and `side_effects`. The `file` field SHALL be a root-relative POSIX path (the same path prefix produced by the shared PACKAGE_DERIVATION/FUNCTION_ENUMERATION helper), so `(file, function)` joins have parity with complexity and coverage results. Each entry in `side_effects` SHALL always carry `type`, `description`, and `location`; `target` and `detail` are OPTIONAL and SHALL be omitted when not applicable. The `location` path prefix SHALL also be root-relative POSIX (consistent with the `file` field). The optional `detail` object carries Python-specific metadata only (e.g. `{"confidence": "ambiguous"}` or `{"exception_class": "ZeroDivisionError"}`). No effect object SHALL carry a `classification` field (Gaze performs classification). `location` SHALL be formatted `"<file>.py:<line>:<col>"`.
+The `analyze` method SHALL return a result object with a `functions` array. Each function SHALL carry `name`, `package`, `file`, `line`, and `side_effects`. The `file` field SHALL be a root-relative POSIX path (the same root-relative POSIX paths produced by the shared `discovery`/`ordered_file_list` layer used by all three modules), so `(file, function)` joins have parity with complexity and coverage results. Each entry in `side_effects` SHALL always carry `type`, `description`, and `location`; `target` and `detail` are OPTIONAL and SHALL be omitted when not applicable. The `location` path prefix SHALL also be root-relative POSIX (consistent with the `file` field). The optional `detail` object carries Python-specific metadata only (e.g. `{"confidence": "ambiguous"}` or `{"exception_class": "ZeroDivisionError"}`). No effect object SHALL carry a `classification` field (Gaze performs classification). `location` SHALL be formatted `"<file>.py:<line>:<col>"`.
 
 #### Scenario: result shape with target
 - **WHEN** an `analyze` request is answered for a function with one effect that has a natural target (e.g. a `ReceiverMutation`)
@@ -35,7 +35,7 @@ The `analyze` method SHALL return a result object with a `functions` array. Each
 - **THEN** no effect object contains a `classification` key
 
 ### Requirement: package field follows shared derivation
-The `package` field of each function in the result SHALL be derived by the shared package-identity helper: strip `.py` from the file path relative to `root_path`, replace `'/'` with `'.'`, and drop a trailing `.__init__` (so `pkg/__init__.py` → `"pkg"`). This is the same helper used by the detector, complexity, and coverage modules.
+The `package` field of each function in the result SHALL be derived by the shared package-identity helper: strip `.py` from the file path relative to `root_path`, replace `'/'` with `'.'`, and drop a trailing `.__init__` (so `pkg/__init__.py` → `"pkg"`). This is the same `derive_package` helper used by the detector and complexity modules only; coverage result rows carry `file` + `function` (no `package`) per the protocol schema, so coverage does NOT use it.
 
 #### Scenario: pkg/__init__.py package is pkg
 - **WHEN** an `analyze` request covers `pkg/__init__.py` under `root_path`
