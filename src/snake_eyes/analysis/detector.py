@@ -64,7 +64,7 @@ _PURE_BUILTINS: frozenset[str] = frozenset(
         "hash",
         "hex",
         "id",
-        "input",
+        # NOTE: "input" intentionally excluded — input() has a real stdin I/O effect.
         "int",
         "isinstance",
         "issubclass",
@@ -352,9 +352,16 @@ def _is_write_mode(mode: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _collect_open_vars(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """Return local variable names that are assigned from an ``open()`` call."""
-    open_vars: set[str] = set()
+def _collect_open_vars(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> dict[str, bool]:
+    """Return a mapping of local variable name → is_write_mode for ``open()`` calls.
+
+    The boolean value is True when the open() call uses a write-mode flag
+    ('w', 'a', 'x', or '+'), False otherwise (e.g. 'r' or unknown mode).
+    This is used to gate FileSystemWrite co-emission on write-mode opens only.
+    """
+    open_vars: dict[str, bool] = {}
     for node in ast.walk(func_node):
         if isinstance(node, ast.Assign):
             val = node.value
@@ -363,9 +370,11 @@ def _collect_open_vars(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> set
                 and isinstance(val.func, ast.Name)
                 and val.func.id == "open"
             ):
+                mode = _open_mode(val)
+                is_write = mode is not None and _is_write_mode(mode)
                 for target in node.targets:
                     if isinstance(target, ast.Name):
-                        open_vars.add(target.id)
+                        open_vars[target.id] = is_write
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             val = node.value
             if (
@@ -374,7 +383,9 @@ def _collect_open_vars(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> set
                 and val.func.id == "open"
             ):
                 if isinstance(node.target, ast.Name):
-                    open_vars.add(node.target.id)
+                    mode = _open_mode(val)
+                    is_write = mode is not None and _is_write_mode(mode)
+                    open_vars[node.target.id] = is_write
     return open_vars
 
 
@@ -394,7 +405,7 @@ class _EffectVisitor(ast.NodeVisitor):
         global_names: set[str],
         nonlocal_names: set[str],
         param_names: set[str],
-        open_vars: set[str],
+        open_vars: dict[str, bool],
         local_func_names: set[str],
     ) -> None:
         self.filename = filename
@@ -1113,13 +1124,14 @@ class _EffectVisitor(ast.NodeVisitor):
                         node,
                         target=obj_name_str,
                     )
-                    # May co-emit FileSystemWrite for write mode opens
-                    self._add(
-                        SideEffectType.FileSystemWrite,
-                        f"Filesystem write via {obj_name_str}.{method}()",
-                        node,
-                        target=obj_name_str,
-                    )
+                    # Co-emit FileSystemWrite only for write-mode opens (not 'r')
+                    if self.open_vars[obj_name_str]:
+                        self._add(
+                            SideEffectType.FileSystemWrite,
+                            f"Filesystem write via {obj_name_str}.{method}()",
+                            node,
+                            target=obj_name_str,
+                        )
                 else:
                     # Parameter or unknown-origin file object
                     self._add(

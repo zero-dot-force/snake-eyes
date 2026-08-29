@@ -309,7 +309,7 @@ def test_internal_error_via_injected_handler() -> None:
     stdout, stderr = _run(req("boom") + "\n", dispatch={"boom": boom})
     response = responses(stdout)[0]
     assert response["error"]["code"] == INTERNAL_ERROR
-    assert response["error"]["message"] == "boom"
+    assert response["error"]["message"] == "Internal error"
     assert "Traceback" in stderr
 
 

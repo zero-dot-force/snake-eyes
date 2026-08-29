@@ -464,3 +464,21 @@ def test_coverage_canned_exact_equality(tmp_path: Path) -> None:
     assert resp == expected, (
         f"coverage canned response mismatch.\nExpected: {expected}\nGot: {resp}"
     )
+
+
+# ---------------------------------------------------------------------------
+# H5 — FileNotFoundError → -32602 at the JSON-RPC boundary (spec scenario)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["analyze", "complexity", "coverage"])
+def test_nonexistent_root_path_returns_32602(method: str, tmp_path: Path) -> None:
+    """Valid string root_path pointing at a non-existent directory → -32602.
+
+    validates: gaze analyzer protocol v1.1.0
+    spec ref: coverage-method/spec.md lines 41-45
+    """
+    missing = str(tmp_path / "no_such_dir")
+    raw = req(method, root_path=missing) + "\n"
+    resp = responses(_run(raw))[0]
+    assert resp["error"]["code"] == INVALID_PARAMS

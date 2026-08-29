@@ -16,6 +16,7 @@ differs from this module's dotted path (``snake_eyes.coverage``).
 from __future__ import annotations
 
 import ast
+import bisect
 import json
 import pathlib
 import sqlite3
@@ -29,6 +30,7 @@ from .analysis._shared import (
     BROADENED_EXCEPTIONS,
     MAX_FILE_BYTES,
     enumerate_functions_with_spans,
+    is_analyzable_file,
     ordered_file_list,
 )
 
@@ -45,29 +47,11 @@ def _parse_source_spans(
 
     Returns ``None`` when the file should be skipped (non-regular, over-cap,
     or parse error).  Diagnostics go to stderr.
+
+    Uses the centralised ``is_analyzable_file`` guard (Constitution V / H1).
     """
-    try:
-        st = abs_path.stat()
-    except OSError as exc:
-        print(
-            f"snake-eyes/coverage: skipping {rel_path}: stat failed: {exc}",
-            file=sys.stderr,
-        )
-        return None
-
-    if not stat.S_ISREG(st.st_mode):
-        print(
-            f"snake-eyes/coverage: skipping {rel_path}: not a regular file",
-            file=sys.stderr,
-        )
-        return None
-
-    if st.st_size > MAX_FILE_BYTES:
-        print(
-            f"snake-eyes/coverage: skipping {rel_path}: size {st.st_size}"
-            f" exceeds cap {MAX_FILE_BYTES}",
-            file=sys.stderr,
-        )
+    # Centralised stat + S_ISREG + byte-cap guard — no duplication.
+    if not is_analyzable_file(abs_path, label=f"snake-eyes/coverage: {rel_path}"):
         return None
 
     try:
@@ -92,15 +76,22 @@ def _parse_source_spans(
     return spans
 
 
+def _count_in_span(sorted_lines: list[int], start_line: int, end_line: int) -> int:
+    """Count elements in *sorted_lines* within [start_line, end_line] in O(log S)."""
+    lo = bisect.bisect_left(sorted_lines, start_line)
+    hi = bisect.bisect_right(sorted_lines, end_line)
+    return hi - lo
+
+
 def _coverage_entry(
     rel_path: str,
     func_name: str,
     start_line: int,
     end_line: int,
-    executed: set[int],
+    sorted_executed: list[int],
     total_stmts_in_span: int,
 ) -> dict[str, Any]:
-    covered = sum(1 for ln in executed if start_line <= ln <= end_line)
+    covered = _count_in_span(sorted_executed, start_line, end_line)
     total = total_stmts_in_span
     pct = round(covered / total * 100, 1) if total > 0 else 0.0
     return {
@@ -146,7 +137,7 @@ def _parse_coverage_json(
             return []
         raw = json_path.read_text(encoding="utf-8")
         data = json.loads(raw)
-    except (OSError, json.JSONDecodeError, MemoryError) as exc:
+    except (OSError, json.JSONDecodeError, MemoryError, RecursionError) as exc:
         print(
             f"snake-eyes/coverage: coverage.json parse error: {exc}",
             file=sys.stderr,
@@ -156,7 +147,8 @@ def _parse_coverage_json(
     try:
         files_map = data["files"]
         if not isinstance(files_map, dict):
-            return None
+            # M9: non-dict 'files' value → graceful degradation to [] (not None)
+            return []
     except (KeyError, TypeError):
         return None
 
@@ -167,11 +159,9 @@ def _parse_coverage_json(
         abs_candidate = _confine_path(key, root)
         if abs_candidate is None:
             continue
-        # Normalize to root-relative POSIX
-        try:
-            rel_path = abs_candidate.relative_to(root).as_posix()
-        except ValueError:
-            continue
+        # Normalize to root-relative POSIX.
+        # _confine_path guarantees containment, so relative_to always succeeds.
+        rel_path = abs_candidate.relative_to(root).as_posix()
 
         # Only process discovered files
         if rel_path not in discovered:
@@ -198,20 +188,24 @@ def _parse_coverage_json(
             continue
         all_stmts: set[int] = executed | missing
 
+        # Sort once per file for O(log S) bisect counting (M5).
+        sorted_executed = sorted(executed)
+        sorted_all_stmts = sorted(all_stmts)
+
         # Build function spans
         spans = _parse_source_spans(abs_candidate, rel_path)
         if spans is None:
             continue
 
         for func_name, start_line, end_line in spans:
-            stmts_in_span = sum(1 for ln in all_stmts if start_line <= ln <= end_line)
+            stmts_in_span = _count_in_span(sorted_all_stmts, start_line, end_line)
             entries.append(
                 _coverage_entry(
                     rel_path,
                     func_name,
                     start_line,
                     end_line,
-                    executed,
+                    sorted_executed,
                     stmts_in_span,
                 )
             )
@@ -231,12 +225,17 @@ def _parse_dot_coverage(
 ) -> list[dict[str, Any]] | None:
     """Parse a ``.coverage`` data file via the coverage.py API."""
     try:
-        cov = coverage_pkg.Coverage(data_file=str(dot_cov_path))
+        # H2: config_file=False prevents auto-discovery of [tool.coverage] /
+        # .coveragerc from cwd — non-deterministic + plugin exec (Constitution I,V).
+        cov = coverage_pkg.Coverage(data_file=str(dot_cov_path), config_file=False)
         cov.load()
     except (
         sqlite3.DatabaseError,
         coverage_pkg.exceptions.CoverageException,
         OSError,
+        MemoryError,
+        ValueError,
+        RecursionError,
     ) as exc:
         print(
             f"snake-eyes/coverage: .coverage load error: {exc}",
@@ -249,22 +248,9 @@ def _parse_dot_coverage(
     for rel_path in discovered:
         abs_candidate = root / rel_path
 
-        # Guard: stat + S_ISREG before any open()/analysis2() to prevent blocking
-        # on non-regular files (FIFOs, devices, sockets).  Constitution V / D13.
-        try:
-            st = abs_candidate.stat()
-        except OSError as exc:
-            print(
-                f"snake-eyes/coverage: skipping {rel_path}: stat failed: {exc}",
-                file=sys.stderr,
-            )
-            continue
-
-        if not stat.S_ISREG(st.st_mode):
-            print(
-                f"snake-eyes/coverage: skipping {rel_path}: not a regular file",
-                file=sys.stderr,
-            )
+        # Guard: stat + S_ISREG + byte-cap before any analysis2() to prevent
+        # blocking on non-regular files and to enforce DoS bound (Constitution V / H1).
+        if not is_analyzable_file(abs_candidate, label=rel_path):
             continue
 
         # analysis2 may raise per-file CoverageException (NoSource, NotPython, etc.)
@@ -290,22 +276,24 @@ def _parse_dot_coverage(
         executed_set: set[int] = set(stmts) - set(missing_stmts)
         all_stmts_set: set[int] = set(stmts)
 
+        # Sort once per file for O(log S) bisect counting (M5).
+        sorted_executed = sorted(executed_set)
+        sorted_all_stmts = sorted(all_stmts_set)
+
         # Build function spans
         spans = _parse_source_spans(abs_candidate, rel_path)
         if spans is None:
             continue
 
         for func_name, start_line, end_line in spans:
-            stmts_in_span = sum(
-                1 for ln in all_stmts_set if start_line <= ln <= end_line
-            )
+            stmts_in_span = _count_in_span(sorted_all_stmts, start_line, end_line)
             entries.append(
                 _coverage_entry(
                     rel_path,
                     func_name,
                     start_line,
                     end_line,
-                    executed_set,
+                    sorted_executed,
                     stmts_in_span,
                 )
             )
@@ -347,9 +335,21 @@ def parse_coverage(
 
     entries: list[dict[str, Any]] | None = None
 
-    if json_path.is_file():
+    # Reject non-regular files (FIFO / device / socket / directory) at the fixed
+    # data-file locations so a planted special file cannot hang or mislead the
+    # parser. Note: p.stat() follows symlinks (exactly like is_file()), so a
+    # symlink to a regular file is still accepted; that is safe because results
+    # are confined to discovered files under root via _confine_path(). Graceful:
+    # a missing or invalid data file → empty result.
+    def _is_regular_file(p: pathlib.Path) -> bool:
+        try:
+            return stat.S_ISREG(p.stat().st_mode)
+        except OSError:
+            return False
+
+    if _is_regular_file(json_path):
         entries = _parse_coverage_json(json_path, root, discovered_set)
-    elif dot_cov_path.is_file():
+    elif _is_regular_file(dot_cov_path):
         entries = _parse_dot_coverage(dot_cov_path, root, discovered_set)
 
     if entries is None:

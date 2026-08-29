@@ -63,20 +63,7 @@ def _shutdown(params: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _discover(params: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(params, dict):
-        raise RpcError(INVALID_PARAMS, "Invalid params: params must be an object")
-    root_path = params.get("root_path")
-    if not isinstance(root_path, str):
-        raise RpcError(INVALID_PARAMS, "Invalid params: root_path must be a string")
-    patterns_raw = params.get("patterns")
-    if patterns_raw is not None and (
-        not isinstance(patterns_raw, list)
-        or not all(isinstance(pattern, str) for pattern in patterns_raw)
-    ):
-        raise RpcError(
-            INVALID_PARAMS, "Invalid params: patterns must be an array of strings"
-        )
-    patterns: list[str] | None = patterns_raw
+    root_path, patterns = _validate_analysis_params(params)
     try:
         result = discover(root_path, patterns)
     except FileNotFoundError as err:
@@ -228,9 +215,9 @@ class Server:
             result = handler(params)
         except RpcError as err:
             self._respond_error(request_id, err.code, err.message)
-        except Exception as err:
+        except Exception:  # noqa: BLE001
             traceback.print_exc(file=self._stderr)
-            self._respond_error(request_id, INTERNAL_ERROR, str(err))
+            self._respond_error(request_id, INTERNAL_ERROR, "Internal error")
         else:
             self._respond(JsonRpcSuccess(request_id, result))
 

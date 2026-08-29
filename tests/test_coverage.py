@@ -199,18 +199,32 @@ def test_syntax_error_file_skipped(tmp_path: Path) -> None:
 
 
 def test_ordering_by_file_start_line_function(tmp_path: Path) -> None:
-    """Results ordered by (file, start_line, function)."""
-    sample = tmp_path / "sample_module.py"
-    shutil.copy(COVERAGE_FIXTURES / "sample_module.py", sample)
+    """Results ordered by (file, start_line, function).
+
+    Testing LOW: uses a two-file fixture where alpha(function) != line order,
+    so a wrong sort key would fail.  zz_early (line 1) must precede aa_late (line 5)
+    even though 'aa_late' < 'zz_early' alphabetically.
+    """
+    # Two files: mod_a.py has one func at line 1; mod_b.py has zz_func at line 1
+    # and aa_func at line 5 — line order and alpha order diverge for mod_b.py.
+    (tmp_path / "mod_a.py").write_text("def one(): return 1\n")
+    (tmp_path / "mod_b.py").write_text(
+        "def zz_early():\n    return 1\n\n\ndef aa_late():\n    return 2\n"
+    )
 
     cov_json = {
         "meta": {"version": "7.0.0"},
         "files": {
-            "sample_module.py": {
-                "executed_lines": [4, 5, 8, 9],
+            "mod_a.py": {
+                "executed_lines": [1],
                 "missing_lines": [],
                 "excluded_lines": [],
-            }
+            },
+            "mod_b.py": {
+                "executed_lines": [2, 6],
+                "missing_lines": [],
+                "excluded_lines": [],
+            },
         },
     }
     (tmp_path / "coverage.json").write_text(json.dumps(cov_json))
@@ -219,6 +233,12 @@ def test_ordering_by_file_start_line_function(tmp_path: Path) -> None:
 
     keys = [(e["file"], e["start_line"], e["function"]) for e in result]
     assert keys == sorted(keys), f"Not ordered by (file,start_line,function): {keys}"
+
+    # Extra: within mod_b.py, zz_early must come before aa_late (line order wins)
+    mod_b_funcs = [e["function"] for e in result if e["file"] == "mod_b.py"]
+    assert mod_b_funcs == ["zz_early", "aa_late"], (
+        f"Expected [zz_early, aa_late] by line order, got {mod_b_funcs}"
+    )
 
 
 def test_zero_total_stmts(tmp_path: Path) -> None:

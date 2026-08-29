@@ -14,6 +14,7 @@ deterministic list of complexity entry dicts ordered by ``(file, line, name)``.
 from __future__ import annotations
 
 import ast
+import sys
 from typing import Any
 
 from ._shared import (
@@ -40,9 +41,6 @@ _DECISION_NODES: tuple[type[ast.AST], ...] = (
     ast.AsyncFor,
     ast.AsyncWith,
 )
-
-# Boolean operators each add one edge per operand beyond the first.
-_BOOL_OPS: tuple[type[ast.AST], ...] = (ast.And, ast.Or)
 
 
 def _cyclomatic_complexity(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
@@ -153,8 +151,6 @@ def compute_complexity(
         try:
             visitor.visit(tree)
         except BROADENED_EXCEPTIONS:
-            import sys
-
             print(
                 f"snake-eyes: skipping {rel_path}: traversal error",
                 file=sys.stderr,
