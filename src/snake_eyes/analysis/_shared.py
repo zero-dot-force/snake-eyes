@@ -8,11 +8,14 @@ Provides:
 - ``derive_package``: dotted module path from a root-relative POSIX file path.
 - ``ordered_file_list``: deterministic ordered concatenation of source_files then
   test_files, de-duplicated preserving first occurrence (never a set union).
+- ``is_analyzable_file``: single guard helper — stat + S_ISREG + byte-cap;
+  emits a stderr diagnostic and returns ``False`` when the file must be skipped.
 """
 
 from __future__ import annotations
 
 import ast
+import pathlib
 import stat
 import sys
 from collections.abc import Iterator
@@ -56,6 +59,45 @@ def derive_package(rel_path: str) -> str:
     return dotted
 
 
+def is_analyzable_file(abs_path: pathlib.Path, label: str | None = None) -> bool:
+    """Return ``True`` iff *abs_path* is a regular file within the byte-size cap.
+
+    Performs ``stat`` → ``S_ISREG`` → ``st_size > MAX_FILE_BYTES`` checks.
+    Emits a one-line ``sys.stderr`` diagnostic and returns ``False`` on any
+    skip condition.  *label* overrides the display name (defaults to
+    ``str(abs_path)``).
+
+    Constitution V / design D13: centralised guard so no caller re-implements
+    the stat + S_ISREG + byte-cap sequence.
+    """
+    display = label if label is not None else str(abs_path)
+    try:
+        st = abs_path.stat()
+    except OSError as exc:
+        print(
+            f"snake-eyes: skipping {display}: stat failed: {exc}",
+            file=sys.stderr,
+        )
+        return False
+
+    if not stat.S_ISREG(st.st_mode):
+        print(
+            f"snake-eyes: skipping {display}: not a regular file",
+            file=sys.stderr,
+        )
+        return False
+
+    if st.st_size > MAX_FILE_BYTES:
+        print(
+            f"snake-eyes: skipping {display}: file size {st.st_size} exceeds"
+            f" cap {MAX_FILE_BYTES}",
+            file=sys.stderr,
+        )
+        return False
+
+    return True
+
+
 def ordered_file_list(root_path: str, patterns: list[str] | None) -> list[str]:
     """Return the ordered concatenation of source_files then test_files.
 
@@ -91,34 +133,11 @@ def iter_source_files(
 
     A per-file diagnostic is written to ``sys.stderr``; nothing goes to stdout.
     """
-    import pathlib
-
     root = pathlib.Path(root_path).resolve()
 
     for rel in rel_paths:
         abs_path = root / rel
-        try:
-            st = abs_path.stat()
-        except OSError as exc:
-            print(
-                f"snake-eyes: skipping {rel}: stat failed: {exc}",
-                file=sys.stderr,
-            )
-            continue
-
-        if not stat.S_ISREG(st.st_mode):
-            print(
-                f"snake-eyes: skipping {rel}: not a regular file",
-                file=sys.stderr,
-            )
-            continue
-
-        if st.st_size > MAX_FILE_BYTES:
-            print(
-                f"snake-eyes: skipping {rel}: file size {st.st_size} exceeds"
-                f" cap {MAX_FILE_BYTES}",
-                file=sys.stderr,
-            )
+        if not is_analyzable_file(abs_path, label=rel):
             continue
 
         try:

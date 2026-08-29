@@ -18,7 +18,7 @@ Snake Eyes is a Gaze-spawned subprocess. It speaks JSON-RPC 2.0 over stdin/stdou
 
 Capability flags advertised at handshake: `discover` is `true`;
 `test_mapping`, `classify_signals`, and `streaming` are `false`.
-Side-effect detection is implemented. `coverage.py>=7.0,<8` is a
+Side-effect detection is implemented. coverage.py (`>=7.0,<8`) is a
 runtime dependency (shipped). Astroid (name inference) is planned for
 a later issue. `radon` is not used — cyclomatic complexity is computed
 via a lifted McCabe implementation (no radon dependency).
@@ -47,7 +47,7 @@ analyzers:
 
 ## Project structure
 
-```
+```text
 snake-eyes/
 ├── src/snake_eyes/
 │   ├── __init__.py
@@ -72,6 +72,28 @@ Delivered in issue #4: `detector.py`, `complexity.py`, `coverage.py`, `_shared.p
 and the `analyze`, `complexity`, and `coverage` JSON-RPC methods.
 Planned later: astroid-based name inference.
 
+## Limits & Troubleshooting
+
+Snake Eyes performs static analysis only on untrusted source and enforces
+fixed resource bounds (not configurable in v1):
+
+- **File size cap** — files larger than 16 MiB (`MAX_FILE_BYTES`) are skipped
+  before they are opened.
+- **AST depth budget** — traversal is bounded at `MAX_AST_DEPTH` (200) nested
+  nodes to prevent stack exhaustion.
+
+When a file is skipped — because it is non-regular (FIFO/device/socket),
+oversized, unparseable (syntax error), or exceeds the depth budget — Snake Eyes
+emits a one-line diagnostic to **stderr** and continues. A single bad file never
+aborts the request, and **stdout carries only the JSON-RPC response**. If Gaze
+reports fewer functions than expected, check Snake Eyes' stderr for `skipping`
+diagnostics.
+
+Coverage data is optional: when `coverage.json` / `.coverage` is absent or
+invalid, the `coverage` method returns an empty result (`[]`), never an error.
+
 ## License
 
-Apache 2.0 -- see [LICENSE](LICENSE).
+Apache 2.0 -- see [LICENSE](LICENSE). Portions of `detector.py` and
+`complexity.py` are lifted from gaze-py under Apache-2.0; see [NOTICE](NOTICE)
+for attribution.

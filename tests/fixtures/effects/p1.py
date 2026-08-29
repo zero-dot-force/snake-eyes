@@ -1,4 +1,4 @@
-"""P1 effects fixture: GeneratorYield, AsyncGeneratorYield, ContainerMutation (param), StreamOutput, GlobalMutation."""
+"""P1 effects fixture: GeneratorYield, AsyncGeneratorYield, PointerArgMutation (param), StreamOutput, FileSystemWrite, GlobalMutation."""
 
 _counter = 0
 

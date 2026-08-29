@@ -439,3 +439,247 @@ def test_detector_complexity_function_set_match(tmp_path: Path) -> None:
     assert det_set == cplx_set, (
         f"Mismatch:\n  detector only: {only_det}\n  complexity only: {only_cplx}"
     )
+
+
+# ---------------------------------------------------------------------------
+# H4 — full-equality golden test for p0.py
+# ---------------------------------------------------------------------------
+
+
+def test_p0_golden_full_equality(tmp_path: Path) -> None:
+    """Full-equality golden test: every function in p0.py must match expected
+    side_effects exactly (type, location, target, detail).
+
+    This test locks against false positives, wrong per-function attribution,
+    and wrong location/target/detail values.  Pin the real, correct detector
+    output — do NOT invent values.
+    """
+    _copy_fixture("p0.py", tmp_path)
+    records = analyze_path(str(tmp_path), None)
+    dicts = {r["name"]: r["side_effects"] for r in _to_dicts(records)}
+
+    # --- returns_value ---
+    assert dicts["returns_value"] == [
+        {
+            "type": "SentinelError",
+            "description": "Module defines sentinel exception class 'MyError'",
+            "location": "p0.py:5:0",
+            "target": "MyError",
+        },
+        {
+            "type": "ReturnValue",
+            "description": "Function returns a value",
+            "location": "p0.py:10:4",
+        },
+    ], f"returns_value mismatch: {dicts['returns_value']}"
+
+    # --- raises_error ---
+    assert dicts["raises_error"] == [
+        {
+            "type": "ErrorReturn",
+            "description": "Function signals error via raise",
+            "location": "p0.py:14:4",
+            "target": "MyError",
+        },
+        {
+            "type": "ErrorSignal",
+            "description": "Exception signal via raise",
+            "location": "p0.py:14:4",
+        },
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'MyError'",
+            "location": "p0.py:14:10",
+            "detail": {"confidence": "ambiguous"},
+        },
+    ], f"raises_error mismatch: {dicts['raises_error']}"
+
+    # --- mutate_self ---
+    assert dicts["mutate_self"] == [
+        {
+            "type": "ReceiverMutation",
+            "description": "Mutates receiver attribute 'x'",
+            "location": "p0.py:19:8",
+            "target": "self.x",
+        },
+    ], f"mutate_self mismatch: {dicts['mutate_self']}"
+
+    # --- mutate_param ---
+    assert dicts["mutate_param"] == [
+        {
+            "type": "PointerArgMutation",
+            "description": "Mutates parameter 'items' via .append()",
+            "location": "p0.py:22:8",
+            "target": "items",
+        },
+    ], f"mutate_param mismatch: {dicts['mutate_param']}"
+
+
+# ---------------------------------------------------------------------------
+# H4 — p3.py positive assertion (intended effects detected)
+# ---------------------------------------------------------------------------
+
+
+def test_p3_positive_effects(tmp_path: Path) -> None:
+    """p3.py must emit StdoutWrite, EnvVarMutation, ProcessExit and ErrorSignal."""
+    _copy_fixture("p3.py", tmp_path)
+    records = analyze_path(str(tmp_path), None)
+    dicts_by_name = {r["name"]: r["side_effects"] for r in _to_dicts(records)}
+
+    # say_hello: print("hello") => StdoutWrite
+    assert any(e["type"] == "StdoutWrite" for e in dicts_by_name["say_hello"]), (
+        f"say_hello must emit StdoutWrite: {dicts_by_name['say_hello']}"
+    )
+
+    # set_env: os.environ["X"] = "1" => EnvVarMutation
+    assert any(e["type"] == "EnvVarMutation" for e in dicts_by_name["set_env"]), (
+        f"set_env must emit EnvVarMutation: {dicts_by_name['set_env']}"
+    )
+
+    # exit_process: sys.exit(0) => ProcessExit + ErrorSignal
+    exit_types = {e["type"] for e in dicts_by_name["exit_process"]}
+    assert "ProcessExit" in exit_types, (
+        f"exit_process must emit ProcessExit: {dicts_by_name['exit_process']}"
+    )
+    assert "ErrorSignal" in exit_types, (
+        f"exit_process must emit ErrorSignal: {dicts_by_name['exit_process']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard LOW — input() is not pure; yields an effect
+# ---------------------------------------------------------------------------
+
+
+def test_input_call_yields_effect() -> None:
+    """input() must NOT be silently dropped — it is an stdin I/O effect.
+
+    After removing input from _PURE_BUILTINS, the detector falls through to
+    CallbackInvocation(ambiguous) since input has real I/O semantics.
+    """
+    source = "def f():\n    x = input('prompt: ')\n    return x\n"
+    records = analyze_source(source, "f.py", "f")
+    all_effects = _all_effects(records)
+    effect_types = {e["type"] for e in all_effects}
+    assert effect_types - {"ReturnValue"}, (
+        f"input() must produce at least one non-ReturnValue effect, got {all_effects}"
+    )
+    # Specifically, it must be CallbackInvocation(ambiguous) — not dropped silently
+    cb = [
+        e
+        for e in all_effects
+        if e["type"] == "CallbackInvocation"
+        and e.get("detail", {}).get("confidence") == "ambiguous"
+    ]
+    assert cb, f"input() must produce CallbackInvocation(ambiguous), got {all_effects}"
+
+
+# ---------------------------------------------------------------------------
+# Guard LOW — FileSystemWrite gated on open mode
+# ---------------------------------------------------------------------------
+
+
+def test_write_mode_open_co_emits_filesystem_write() -> None:
+    """open(p, 'w') + .write() => StreamOutput AND FileSystemWrite."""
+    source = "def f(p):\n    fh = open(p, 'w')\n    fh.write('data')\n"
+    records = analyze_source(source, "f.py", "f")
+    types = _types(records)
+    assert "StreamOutput" in types, "write-mode open must emit StreamOutput"
+    assert "FileSystemWrite" in types, "write-mode open must co-emit FileSystemWrite"
+
+
+def test_read_mode_open_no_filesystem_write() -> None:
+    """open(p, 'r') + .write() => StreamOutput ONLY; NO FileSystemWrite co-emit.
+
+    Chosen approach: mode tracking (dict[var, is_write_mode]) on open_vars.
+    A read-mode open that has a .write() call on it still emits StreamOutput
+    (because the file object has a .write method), but must NOT co-emit
+    FileSystemWrite — contradicting a write operation on a read-mode handle.
+    """
+    source = "def f(p):\n    fh = open(p, 'r')\n    fh.write('x')\n"
+    records = analyze_source(source, "f.py", "f")
+    types = _types(records)
+    assert "StreamOutput" in types, "open-var .write() must still emit StreamOutput"
+    assert "FileSystemWrite" not in types, (
+        "read-mode open must NOT co-emit FileSystemWrite"
+    )
+
+
+def test_unknown_mode_open_no_filesystem_write() -> None:
+    """open(p) with no mode arg => mode unknown; no FileSystemWrite co-emit."""
+    source = "def f(p):\n    fh = open(p)\n    fh.write('x')\n"
+    records = analyze_source(source, "f.py", "f")
+    types = _types(records)
+    assert "StreamOutput" in types, "no-mode open .write() must emit StreamOutput"
+    assert "FileSystemWrite" not in types, (
+        "unknown-mode open must NOT co-emit FileSystemWrite"
+    )
+
+
+# ---------------------------------------------------------------------------
+# M6d — depth-budget guard: an over-deep AST is skipped gracefully; a
+#        co-present valid file still yields effects.
+#
+# NOTE: MAX_AST_DEPTH (200) is unreachable via nested *source text* — CPython's
+# tokenizer rejects indentation past MAXINDENT (100) with IndentationError
+# before the budget is hit, so ast.parse() would fail first. We therefore inject
+# an over-deep AST tree in memory (a deep expression inside one function body)
+# through a mocked iter_source_files, mirroring the complexity-path guard test.
+# ---------------------------------------------------------------------------
+
+
+def test_depth_budget_skip_valid_file_unaffected(tmp_path: Path) -> None:
+    """An over-deep function body trips the effect-visitor depth guard and is
+    skipped without crashing; a co-present valid file still yields its effects.
+
+    Covers _EffectVisitor._check_depth (detector.py) — a Constitution V resource
+    bound — by injecting a deep expression AST that bypasses the tokenizer's
+    MAXINDENT limit (source-text nesting cannot reach MAX_AST_DEPTH).
+    """
+    import ast
+    from unittest import mock
+
+    import snake_eyes.analysis.detector as det_mod
+    from snake_eyes.analysis._shared import MAX_AST_DEPTH
+
+    # One function whose body is a single very deep expression: 1 + 1 + 1 + ...
+    # (BinOp nesting deeper than MAX_AST_DEPTH).
+    expr: ast.expr = ast.Constant(value=1)
+    for _ in range(MAX_AST_DEPTH + 10):
+        expr = ast.BinOp(left=expr, op=ast.Add(), right=ast.Constant(value=1))
+    deep_func = ast.FunctionDef(
+        name="deep",
+        args=ast.arguments(
+            posonlyargs=[],
+            args=[],
+            kwonlyargs=[],
+            kw_defaults=[],
+            defaults=[],
+        ),
+        body=[ast.Expr(value=expr)],
+        decorator_list=[],
+        lineno=1,
+        col_offset=0,
+    )
+    deep_module = ast.Module(body=[deep_func], type_ignores=[])
+    ast.fix_missing_locations(deep_module)
+
+    # Co-present valid file with a known effect.
+    (tmp_path / "good.py").write_text("def ok():\n    return 42\n")
+
+    original_iter = det_mod.iter_source_files
+
+    def mock_iter(root_path, rel_paths):
+        yield ("deep.py", "", deep_module)
+        yield from original_iter(root_path, [p for p in rel_paths if p != "deep.py"])
+
+    with mock.patch.object(det_mod, "iter_source_files", mock_iter):
+        records = analyze_path(str(tmp_path), None)
+
+    names = [r.name for r in records]
+    # deep.py tripped the depth guard and was skipped (no crash); the valid
+    # file's effects are still present.
+    assert "ok" in names, f"valid function 'ok' must be present; got {names}"
+    ok_records = [r for r in records if r.name == "ok"]
+    ok_types = {e["type"] for r in _to_dicts(ok_records) for e in r["side_effects"]}
+    assert "ReturnValue" in ok_types, f"ok() must emit ReturnValue; got {ok_types}"

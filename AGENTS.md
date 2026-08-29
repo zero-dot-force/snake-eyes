@@ -106,7 +106,7 @@ snake-eyes/
 ├── LICENSE
 └── NOTICE
 ```
-Delivered in issue #4: `detector.py`, `complexity.py`, `coverage.py`, `_shared.py`.
+Delivered in issue #4: `detector.py`, `complexity.py`, `coverage.py`, `_shared.py`, and the `analyze`, `complexity`, and `coverage` JSON-RPC methods.
 
 ## Shell Commands
 
