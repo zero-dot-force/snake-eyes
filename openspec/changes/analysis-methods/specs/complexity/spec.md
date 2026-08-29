@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: cyclomatic complexity computation
-The system SHALL provide a `cyclomatic_complexity` computation lifted from gaze-py that computes McCabe cyclomatic complexity over a function's AST. The computation SHALL count the standard McCabe decision points (branch and boolean-operator nodes) and SHALL be deterministic for identical input.
+The system SHALL provide a `compute_complexity(root_path, patterns)` public entry point that returns per-function McCabe complexity entries. The per-function McCabe logic is implemented as the private `_cyclomatic_complexity` helper, lifted from gaze-py, which counts the standard McCabe decision points (branch and boolean-operator nodes) and is deterministic for identical input.
 
 #### Scenario: linear function has complexity 1
 - **WHEN** complexity is computed for `def f():\n    return 1\n`
@@ -23,7 +23,7 @@ The system SHALL compute complexity for every `def` and `async def` across the o
 - **THEN** no complexity entry is produced for the lambda
 
 ### Requirement: complexity entry fields
-Each complexity entry SHALL carry `name` (unqualified definition name), `package` (dotted module path derived from the file path relative to `root_path`), `file` (path relative to `root_path`), `line` (definition line), and `complexity` (integer). Duplicate nested names SHALL each appear as a separate entry distinguished by `line`. The `package` field MUST be derived using the shared package-derivation helper: strip `.py`, replace `/` with `.`, and drop a trailing `.__init__` (so `pkg/__init__.py` → `pkg`). This helper is shared by the detector, complexity, and coverage modules and MUST NOT be reimplemented inline.
+Each complexity entry SHALL carry `name` (unqualified definition name), `package` (dotted module path derived from the file path relative to `root_path`), `file` (path relative to `root_path`), `line` (definition line), and `complexity` (integer). Duplicate nested names SHALL each appear as a separate entry distinguished by `line`. The `package` field MUST be derived using the shared `derive_package` helper: strip `.py`, replace `/` with `.`, and drop a trailing `.__init__` (so `pkg/__init__.py` → `pkg`). This helper is shared by the detector and complexity modules only — coverage result rows carry `file` + `function` (no `package`) per the protocol schema, so coverage does NOT use `derive_package`. MUST NOT be reimplemented inline.
 
 #### Scenario: entry carries required fields
 - **WHEN** complexity is computed for a function `f` in `pkg/mod.py`
