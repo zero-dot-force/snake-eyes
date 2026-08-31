@@ -4,7 +4,7 @@
 # Python effect types mapped to their closest gaze-py branch.
 """``docstring`` source: docstring keywords vs. effect category.
 
-When a function's docstring documents the behaviour that produced an effect
+When a function's docstring documents the behavior that produced an effect
 (mentions returning/yielding for a returning effect, raising for an error
 effect, or mutating for a mutation effect), the effect is more likely
 contractual. A missing docstring or an unrelated category produces no signal.

@@ -17,9 +17,14 @@ Constitution V (Analysis Safety) guarantees enforced here:
 * **Isolation** -- an isolated per-request manager cache is used so that a
   prior request over a different tree cannot contaminate this one in the
   long-lived stdio server.
-* **On-disk resolution** -- callees are only counted when they resolve to a
-  file within the analyzed set, so ambient ``site-packages`` are never
-  consulted.
+* **On-disk resolution** -- callees are only *counted* when they resolve to a
+  file within the analyzed set. Inference is attempted only for call sites
+  whose unqualified name matches a function defined in the analyzed project,
+  so ambient ``stdlib``/``site-packages`` modules are not parsed for the
+  common case. A callee that merely shares its unqualified name with an
+  in-project function may still be inferred (and its defining module parsed);
+  such transitive parsing is not bounded by the 16 MiB per-file cap, so a
+  ``MemoryError`` there degrades the whole index to empty.
 * **Graceful degradation** -- any astroid/resource failure degrades the whole
   index to empty (counts of zero); a single uninferable call site is skipped.
 """
@@ -27,6 +32,7 @@ Constitution V (Analysis Safety) guarantees enforced here:
 from __future__ import annotations
 
 import pathlib
+import sys
 from collections import defaultdict
 
 import astroid  # type: ignore[import-untyped]
@@ -102,8 +108,18 @@ def build_caller_index(root_path: str, patterns: list[str] | None) -> CallerInde
     root = pathlib.Path(root_path)
     try:
         return _build(root, rel_paths)
-    except _DEGRADE_EXCEPTIONS:
+    except _DEGRADE_EXCEPTIONS as exc:
+        print(
+            f"snake-eyes: classify_signals caller index degraded to empty:"
+            f" {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
         return _empty_index()
+    finally:
+        # Release parsed modules promptly; the start-of-build clear_cache in
+        # _build handles cross-request isolation, this bounds resident memory
+        # in the long-lived stdio server between requests.
+        astroid.MANAGER.clear_cache()
 
 
 def _build(root: pathlib.Path, rel_paths: list[str]) -> CallerIndex:
@@ -123,20 +139,52 @@ def _build(root: pathlib.Path, rel_paths: list[str]) -> CallerIndex:
         modname = _shared.derive_package(rel)
         try:
             module = manager.ast_from_file(str(abs_path), modname, source=True)
-        except _DEGRADE_EXCEPTIONS:
+        except _DEGRADE_EXCEPTIONS as exc:
+            print(
+                f"snake-eyes: classify_signals skipping {rel}:"
+                f" {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
             continue
         norm = _normalize(str(abs_path))
         analyzed_files.add(norm)
         module_to_file[modname] = norm
         modules.append(module)
 
+    # Names of functions defined anywhere in the analyzed project. Inference is
+    # attempted only for call sites whose unqualified name is in this set, so
+    # astroid does not parse ambient stdlib/site-packages modules (which bypass
+    # the 16 MiB byte-cap) to resolve external callees that would never count.
+    defined_names: set[str] = set()
+    for module in modules:
+        for func in module.nodes_of_class((nodes.FunctionDef, nodes.AsyncFunctionDef)):
+            defined_names.add(func.name)
+
     counts: dict[tuple[str, str], int] = defaultdict(int)
     for module in modules:
         for call in module.nodes_of_class(nodes.Call):
+            name = _call_simple_name(call)
+            if name is None or name not in defined_names:
+                continue
             target = _resolve_call_target(call, analyzed_files)
             if target is not None:
                 counts[target] += 1
     return CallerIndex(dict(counts), module_to_file)
+
+
+def _call_simple_name(call: nodes.Call) -> str | None:
+    """Return the callee's unqualified name (``foo`` in ``foo()`` or ``x.foo()``).
+
+    Returns ``None`` for call shapes without a simple name (e.g. calling the
+    result of another expression), which are never matched against the
+    in-project function-name set and so are never inferred.
+    """
+    func = call.func
+    if isinstance(func, nodes.Name):
+        return str(func.name)
+    if isinstance(func, nodes.Attribute):
+        return str(func.attrname)
+    return None
 
 
 def _resolve_call_target(
@@ -149,7 +197,16 @@ def _resolve_call_target(
     """
     try:
         inferred = list(call.func.infer())
-    except _DEGRADE_EXCEPTIONS:
+    except Exception as exc:
+        # astroid inference can raise beyond _DEGRADE_EXCEPTIONS (e.g.
+        # AttributeError/KeyError/TypeError/RuntimeError) on pathological or
+        # untrusted input. Skip this one call site rather than failing the whole
+        # classify_signals request with -32603 (Constitution V degradation).
+        print(
+            f"snake-eyes: classify_signals skipping uninferable call site:"
+            f" {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
         return None
     for candidate in inferred:
         if candidate is Uninferable:
