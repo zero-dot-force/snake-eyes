@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import io
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -73,7 +76,19 @@ def test_non_string_pattern_element_is_invalid_params(tmp_path: Path) -> None:
     assert resp["error"]["code"] == INVALID_PARAMS
 
 
-def test_output_is_deterministic(tmp_path: Path) -> None:
+def test_output_is_deterministic_across_hash_seeds(tmp_path: Path) -> None:
     _module(tmp_path)
     raw = req("classify_signals", root_path=str(tmp_path)) + "\n"
-    assert _run(raw) == _run(raw)
+
+    def _subprocess_run(seed: str) -> str:
+        result = subprocess.run(
+            [sys.executable, "-m", "snake_eyes", "--stdio"],
+            input=raw,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            check=True,
+        )
+        return result.stdout
+
+    assert _subprocess_run("0") == _subprocess_run("1")
