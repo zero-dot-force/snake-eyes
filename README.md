@@ -15,13 +15,15 @@ Snake Eyes is a Gaze-spawned subprocess. It speaks JSON-RPC 2.0 over stdin/stdou
 | `analyze` | Implemented |
 | `complexity` | Implemented |
 | `coverage` | Implemented |
+| `classify_signals` | Implemented |
 
-Capability flags advertised at handshake: `discover` is `true`;
-`test_mapping`, `classify_signals`, and `streaming` are `false`.
-Side-effect detection is implemented. coverage.py (`>=7.0,<8`) is a
-runtime dependency (shipped). Astroid (name inference) is planned for
-a later issue. `radon` is not used — cyclomatic complexity is computed
-via a lifted McCabe implementation (no radon dependency).
+Capability flags advertised at handshake: `discover` and
+`classify_signals` are `true`; `test_mapping` and `streaming` are `false`.
+Side-effect detection and classification-signal extraction are
+implemented. coverage.py (`>=7.0,<8`) and astroid (`>=3.0,<4`,
+caller-count inference) are runtime dependencies (shipped). `radon` is
+not used — cyclomatic complexity is computed via a lifted McCabe
+implementation (no radon dependency).
 
 ## Installation
 
@@ -56,13 +58,24 @@ snake-eyes/
 │   ├── protocol.py          # Request/response types
 │   ├── discovery.py         # File discovery (os.walk)
 │   ├── coverage.py          # Coverage data parser (coverage.json / .coverage)
-│   └── analysis/
+│   ├── analysis/
+│   │   ├── __init__.py
+│   │   ├── _shared.py       # Shared helpers (safe file reader, package derivation)
+│   │   ├── effects.py       # 48-type SideEffectType taxonomy
+│   │   ├── models.py        # Effect / FunctionRecord data models
+│   │   ├── detector.py      # Python side-effect detector (analyze method)
+│   │   ├── complexity.py    # McCabe cyclomatic complexity (complexity method)
+│   │   └── inference.py     # astroid caller-count inference (classify_signals)
+│   └── signals/
 │       ├── __init__.py
-│       ├── _shared.py       # Shared helpers (safe file reader, package derivation)
-│       ├── effects.py       # 48-type SideEffectType taxonomy
-│       ├── models.py        # Effect / FunctionRecord data models
-│       ├── detector.py      # Python side-effect detector (analyze method)
-│       └── complexity.py    # McCabe cyclomatic complexity (complexity method)
+│       ├── interface.py     # interface source extractor (lifted from gaze-py)
+│       ├── visibility.py    # visibility source extractor (lifted from gaze-py)
+│       ├── caller.py        # caller_count source extractor (lifted from gaze-py)
+│       ├── naming.py        # naming_convention extractor (lifted from gaze-py)
+│       ├── docstring.py     # docstring source extractor (lifted from gaze-py)
+│       ├── _routing.py      # effect-type → category routing (naming/docstring)
+│       ├── _types.py        # SignalResult value type
+│       └── adapter.py       # extract_signals fan-out (classify_signals method)
 ├── tests/
 ├── pyproject.toml
 └── NOTICE
@@ -70,7 +83,8 @@ snake-eyes/
 
 Delivered in issue #4: `detector.py`, `complexity.py`, `coverage.py`, `_shared.py`,
 and the `analyze`, `complexity`, and `coverage` JSON-RPC methods.
-Planned later: astroid-based name inference.
+Delivered in issue #5: the `signals/` extractors, `analysis/inference.py`
+(astroid caller-count inference), and the `classify_signals` JSON-RPC method.
 
 ## Limits & Troubleshooting
 
@@ -94,6 +108,8 @@ invalid, the `coverage` method returns an empty result (`[]`), never an error.
 
 ## License
 
-Apache 2.0 -- see [LICENSE](LICENSE). Portions of `detector.py` and
-`complexity.py` are lifted from gaze-py under Apache-2.0; see [NOTICE](NOTICE)
-for attribution.
+Apache 2.0 -- see [LICENSE](LICENSE). Portions of `detector.py`,
+`complexity.py`, and the `signals/` extractors (`interface.py`, `visibility.py`,
+`caller.py`, `naming.py`, `docstring.py`, `_routing.py`) are lifted or
+reconstructed from gaze-py under Apache-2.0; see [NOTICE](NOTICE) for
+attribution.
