@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: signal extractor package and source identifiers
-The system SHALL provide a `src/snake_eyes/signals/` package containing five signal extractors lifted from gaze-py `src/gaze_py/classify/signals/`: `interface.py`, `visibility.py`, `caller.py`, `naming.py`, and `docstring.py`. Each extractor SHALL emit its signal `source` as exactly one of the five protocol v1.1.0 strings — `interface`, `visibility`, `caller_count`, `naming_convention`, `docstring` — and SHALL NOT introduce any other `source` value (no sixth extractor, no `type_annotation`). Each extractor SHALL return either a single raw signal (carrying `weight` and a short, non-empty `reasoning`) or `None` when no rule applies.
+The system SHALL provide a `src/snake_eyes/signals/` package containing five signal extractors reconstructed from gaze-py's documented `src/gaze_py/classify/signals/` behavior: `interface.py`, `visibility.py`, `caller.py`, `naming.py`, and `docstring.py`. Each extractor SHALL emit its signal `source` as exactly one of the five protocol v1.1.0 strings — `interface`, `visibility`, `caller_count`, `naming_convention`, `docstring` — and SHALL NOT introduce any other `source` value (no sixth extractor, no `type_annotation`). Each extractor SHALL return either a single raw signal (carrying `weight` and a short, non-empty `reasoning`) or `None` when no rule applies.
 
 #### Scenario: only the five protocol sources are produced
 - **WHEN** any extractor emits a signal
@@ -12,7 +12,7 @@ The system SHALL provide a `src/snake_eyes/signals/` package containing five sig
 - **THEN** it returns `None` and no signal is produced
 
 ### Requirement: interface extractor detects ABC and Protocol bases
-The `interface` extractor SHALL emit an `interface` signal for a method defined on a class whose bases include an abstract base class (`abc.ABC`, a metaclass of `abc.ABCMeta`) or `typing.Protocol`. The emitted weight SHALL be the gaze-py interface weight (the lifted gaze-py source value, expected to be `30`). A method on a class with no interface base SHALL produce no `interface` signal.
+The `interface` extractor SHALL emit an `interface` signal for a method defined on a class whose bases include an abstract base class (`abc.ABC`, a metaclass of `abc.ABCMeta`) or `typing.Protocol`. The emitted weight SHALL be the gaze-py interface weight (the documented gaze-py value, expected to be `30`). A method on a class with no interface base SHALL produce no `interface` signal.
 
 #### Scenario: ABC subclass method fires interface signal
 - **WHEN** a method is defined on a class that subclasses `abc.ABC`
@@ -27,21 +27,21 @@ The `interface` extractor SHALL emit an `interface` signal for a method defined 
 - **THEN** the `interface` extractor returns `None` and no `interface` signal is emitted
 
 ### Requirement: visibility extractor distinguishes public and private names
-The `visibility` extractor SHALL emit a `visibility` signal based on the function's public/private naming convention (leading-underscore private vs. public) and `__all__` membership, using the gaze-py weights verbatim. A public function and a private (leading-underscore) function SHALL produce distinguishable `visibility` outcomes (different weight, or one emits while the other does not), matching the lifted gaze-py behavior. The extractor SHALL NOT redefine the gaze-py weights.
+The `visibility` extractor SHALL emit a `visibility` signal based on the function's public/private naming convention (leading-underscore private vs. public) and `__all__` membership, using gaze-py's documented weights. A public function and a private (leading-underscore) function SHALL produce distinguishable `visibility` outcomes (different weight, or one emits while the other does not), matching gaze-py's documented behavior. The extractor SHALL NOT redefine the gaze-py weights.
 
 #### Scenario: public and private names differ in visibility signal
 - **WHEN** the extractor runs for a public function `def public_fn()` and for a private function `def _private()`
-- **THEN** the two `visibility` results differ per the lifted gaze-py implementation (either the private function's weight is lower, or one emits a signal while the other returns `None`), without any weight value being changed
+- **THEN** the two `visibility` results differ per gaze-py's documented behavior (either the private function's weight is lower, or one emits a signal while the other returns `None`), without any weight value being changed
 
 ### Requirement: caller_count extractor maps inbound counts to gaze-py buckets
-The `caller` extractor SHALL accept an inbound caller count and emit a `caller_count` signal whose weight is the gaze-py weight for that count's bucket. The bucket boundaries and their weights SHALL be preserved verbatim from gaze-py; this change SHALL NOT retune them. When gaze-py emits no signal for a given count (e.g. a zero-caller count), the extractor SHALL return `None` for that count.
+The `caller` extractor SHALL accept an inbound caller count and emit a `caller_count` signal whose weight is the gaze-py weight for that count's bucket. The bucket boundaries and their weights SHALL match gaze-py's documented values exactly; this change SHALL NOT retune them. When gaze-py emits no signal for a given count (e.g. a zero-caller count), the extractor SHALL return `None` for that count.
 
 #### Scenario: distinct counts map to their gaze-py bucket weights
 - **WHEN** the `caller` extractor is invoked with inbound counts of `0`, `5`, and `20`
 - **THEN** each invocation returns the gaze-py `caller_count` weight for that count's bucket (or `None` where gaze-py emits no signal), with the gaze-py bucket boundaries and weights unchanged
 
 ### Requirement: naming_convention extractor matches function name against effect type
-The `naming` extractor SHALL emit a `naming_convention` signal when the function name's convention agrees with the effect type (e.g. a `get_`/`is_`/`has_` prefix agreeing with `ReturnValue`), and SHALL preserve gaze-py's negative-agreement outcomes (a name gaze-py treats as contradicting the effect stays negative). Weights SHALL be preserved verbatim from gaze-py.
+The `naming` extractor SHALL emit a `naming_convention` signal when the function name's convention agrees with the effect type (e.g. a `get_`/`is_`/`has_` prefix agreeing with `ReturnValue`), and SHALL preserve gaze-py's negative-agreement outcomes (a name gaze-py treats as contradicting the effect stays negative). Weights SHALL match gaze-py's documented values.
 
 #### Scenario: getter name agrees with ReturnValue
 - **WHEN** the extractor runs for a function named `get_foo` with effect type `ReturnValue`
@@ -52,7 +52,7 @@ The `naming` extractor SHALL emit a `naming_convention` signal when the function
 - **THEN** the `naming_convention` result remains the negative-agreement outcome defined by gaze-py, unchanged
 
 ### Requirement: docstring extractor matches docstring keywords against effect type
-The `docstring` extractor SHALL emit a `docstring` signal when the function docstring contains keywords that agree with the effect type (e.g. a docstring mentioning "returns" agreeing with `ReturnValue`, or naming an exception agreeing with `ErrorReturn`/`ErrorSignal`), using gaze-py weights verbatim. A function with no docstring, or a docstring with no matching keyword, SHALL produce no `docstring` signal.
+The `docstring` extractor SHALL emit a `docstring` signal when the function docstring contains keywords that agree with the effect type (e.g. a docstring mentioning "returns" agreeing with `ReturnValue`, or naming an exception agreeing with `ErrorReturn`/`ErrorSignal`), using gaze-py's documented weights. A function with no docstring, or a docstring with no matching keyword, SHALL produce no `docstring` signal.
 
 #### Scenario: docstring mentioning returns agrees with ReturnValue
 - **WHEN** the extractor runs for a function whose docstring contains "returns" with effect type `ReturnValue`
@@ -62,8 +62,8 @@ The `docstring` extractor SHALL emit a `docstring` signal when the function docs
 - **WHEN** the extractor runs for a function with no docstring
 - **THEN** the `docstring` extractor returns `None`
 
-### Requirement: gaze-py signal weights preserved verbatim
-The extractors SHALL preserve the gaze-py signal weights exactly as lifted. These weights are governance-gate values consumed by Gaze's classification formula; this change SHALL NOT retune, clamp, or otherwise modify them, and tests SHALL assert the gaze-py weights rather than redefine them.
+### Requirement: gaze-py signal weights preserved exactly
+The extractors SHALL preserve the gaze-py signal weights exactly as documented. These weights are governance-gate values consumed by Gaze's classification formula; this change SHALL NOT retune, clamp, or otherwise modify them, and tests SHALL assert the gaze-py weights rather than redefine them.
 
 #### Scenario: interface weight is the gaze-py value
 - **WHEN** the `interface` extractor emits a signal
@@ -91,9 +91,9 @@ The extractor modules SHALL NOT compute or assign any classification label. The 
 - **WHEN** `src/snake_eyes/signals/` production code is scanned for `contractual`, `incidental`, or `ambiguous` used as assigned values
 - **THEN** none is found (occurrences, if any, are only in comments forbidding them)
 
-### Requirement: gaze-py provenance retained on lifted extractors
-Each lifted `signals/*.py` extractor SHALL retain the gaze-py copyright header (Matt Peter, Apache 2.0) AND SHALL add an Apache-2.0 §4(b) change notice identifying zero-dot-force as the modifier (e.g. `# Modified 2026 by zero-dot-force: adapted to snake_eyes SideEffectType; new Python effect types mapped.`).
+### Requirement: gaze-py provenance retained on reconstructed extractors
+Each reconstructed `signals/*.py` extractor SHALL retain a gaze-py copyright header (Matt Peter, Apache 2.0) AND SHALL add an Apache-2.0 §4(b) change notice identifying zero-dot-force as the modifier (e.g. `# Modified 2026 by zero-dot-force: reconstructed from documented gaze-py behavior; adapted to snake_eyes SideEffectType; new Python effect types mapped.`).
 
-#### Scenario: provenance header present on a lifted extractor
+#### Scenario: provenance header present on a reconstructed extractor
 - **WHEN** `src/snake_eyes/signals/interface.py` is inspected
 - **THEN** it contains the gaze-py Apache 2.0 provenance header and an Apache-2.0 §4(b) change notice identifying zero-dot-force

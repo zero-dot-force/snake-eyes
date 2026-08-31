@@ -68,12 +68,12 @@ snake-eyes/
 │   │   └── inference.py     # astroid caller-count inference (classify_signals)
 │   └── signals/
 │       ├── __init__.py
-│       ├── interface.py     # interface source extractor (lifted from gaze-py)
-│       ├── visibility.py    # visibility source extractor (lifted from gaze-py)
-│       ├── caller.py        # caller_count source extractor (lifted from gaze-py)
-│       ├── naming.py        # naming_convention extractor (lifted from gaze-py)
-│       ├── docstring.py     # docstring source extractor (lifted from gaze-py)
-│       ├── _routing.py      # effect-type → category routing (naming/docstring)
+│       ├── interface.py     # interface source extractor (reconstructed from gaze-py)
+│       ├── visibility.py    # visibility source extractor (reconstructed from gaze-py)
+│       ├── caller.py        # caller_count source extractor (reconstructed from gaze-py)
+│       ├── naming.py        # naming_convention source extractor (reconstructed from gaze-py)
+│       ├── docstring.py     # docstring source extractor (reconstructed from gaze-py)
+│       ├── _routing.py      # effect-type → category routing (reconstructed from gaze-py)
 │       ├── _types.py        # SignalResult value type
 │       └── adapter.py       # extract_signals fan-out (classify_signals method)
 ├── tests/
