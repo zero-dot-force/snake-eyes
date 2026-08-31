@@ -92,22 +92,22 @@ snake-eyes/
 │   ├── discovery.py         # File discovery (os.walk)
 │   ├── coverage.py          # Coverage data parser (coverage.json / .coverage)
 │   ├── analysis/
-│       ├── __init__.py
-│       ├── _shared.py       # Shared helpers (safe file reader, package derivation)
-│       ├── effects.py       # 48-type SideEffectType taxonomy
-│       ├── models.py        # Effect / FunctionRecord data models
-│       ├── detector.py      # Python side-effect detector (analyze method)
-│       ├── complexity.py    # McCabe cyclomatic complexity (complexity method)
-│       └── inference.py     # astroid caller-count inference (classify_signals)
+│   │   ├── __init__.py
+│   │   ├── _shared.py       # Shared helpers (safe file reader, package derivation)
+│   │   ├── effects.py       # 48-type SideEffectType taxonomy
+│   │   ├── models.py        # Effect / FunctionRecord data models
+│   │   ├── detector.py      # Python side-effect detector (analyze method)
+│   │   ├── complexity.py    # McCabe cyclomatic complexity (complexity method)
+│   │   └── inference.py     # astroid caller-count inference (classify_signals)
 │   └── signals/
 │       ├── __init__.py
-│       ├── _routing.py      # effect-type → category routing (lifted from gaze-py)
+│       ├── _routing.py      # effect-type → category routing (reconstructed from gaze-py)
 │       ├── _types.py        # SignalResult value type
-│       ├── interface.py     # interface source extractor (lifted from gaze-py)
-│       ├── visibility.py    # visibility source extractor (lifted from gaze-py)
-│       ├── caller.py        # caller_count source extractor (lifted from gaze-py)
-│       ├── naming.py        # naming_convention source extractor (lifted from gaze-py)
-│       ├── docstring.py     # docstring source extractor (lifted from gaze-py)
+│       ├── interface.py     # interface source extractor (reconstructed from gaze-py)
+│       ├── visibility.py    # visibility source extractor (reconstructed from gaze-py)
+│       ├── caller.py        # caller_count source extractor (reconstructed from gaze-py)
+│       ├── naming.py        # naming_convention source extractor (reconstructed from gaze-py)
+│       ├── docstring.py     # docstring source extractor (reconstructed from gaze-py)
 │       └── adapter.py       # extract_signals fan-out (classify_signals method)
 ├── tests/
 ├── .github/workflows/       # CI: ruff, mypy, pytest gates

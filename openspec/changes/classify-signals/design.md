@@ -4,14 +4,14 @@ Gaze's universal scoring engine classifies each side effect as contractual, inci
 
 snake-eyes already ships the pieces this change builds on, delivered by #4 (analysis-methods, merged): the `analyze_path`/`analyze_source` detector, the 48-value `SideEffectType` taxonomy (`analysis/effects.py`), the `Effect`/`FunctionRecord` models, and the shared discovery/AST layer (`_shared.py`, `discovery.py`). The one advertised-but-unimplemented optional capability that remains is `classify_signals` (`capabilities.classify_signals: false`, method returns `-32601`).
 
-The constraint that shapes this whole design: **Gaze owns scoring, snake-eyes owns signal extraction.** If snake-eyes also scored, two implementations of the formula would drift. So snake-eyes lifts the gaze-py *extractors* and never the *engine*.
+The constraint that shapes this whole design: **Gaze owns scoring, snake-eyes owns signal extraction.** If snake-eyes also scored, two implementations of the formula would drift. So snake-eyes reconstructs the gaze-py *extractors* (from their documented behavior) and never the *engine*.
 
 ## Goals / Non-Goals
 
 **Goals:**
 - Implement the `classify_signals` JSON-RPC method returning `{"signals": [...]}` with the exact protocol v1.1.0 field names (`function`, `package`, `side_effect_type`, `source`, `weight`, and `reasoning`). `reasoning` is a protocol-optional field that snake-eyes always emits as a short, non-empty string.
 - Emit only the five mechanical signals from exactly five sources: `interface`, `visibility`, `caller_count`, `naming_convention`, `docstring`.
-- Reuse gaze-py's extraction logic (and its weights) verbatim so Gaze's formula receives the same signals it would for equivalent Python code.
+- Faithfully reproduce gaze-py's documented extraction logic (and its weights) so Gaze's formula receives the same signals it would for equivalent Python code.
 - Degrade gracefully: an astroid inference failure yields `caller_count = 0`, never an RPC error.
 - Flip `capabilities.classify_signals` to `true` to match the implemented behavior.
 
@@ -24,8 +24,8 @@ The constraint that shapes this whole design: **Gaze owns scoring, snake-eyes ow
 
 ## Decisions
 
-### Decision: Lift the five extractors, never the engine
-snake-eyes copies `interface.py`, `visibility.py`, `caller.py`, `naming.py`, `docstring.py` into a new `src/snake_eyes/signals/` package and writes an original orchestrator (`adapter.py`) in place of gaze-py's `engine.py`.
+### Decision: Reconstruct the five extractors, never the engine
+snake-eyes reconstructs `interface.py`, `visibility.py`, `caller.py`, `naming.py`, `docstring.py` from gaze-py's documented behavior into a new `src/snake_eyes/signals/` package and writes an original orchestrator (`adapter.py`) in place of gaze-py's `engine.py`.
 
 *Rationale:* The classification formula lives in the Gaze Go core. Lifting the engine would create a second scorer that could drift from the canonical one — a Protocol Fidelity (Principle I) violation waiting to happen. Extractors are the mechanical, language-specific part that legitimately belongs in the analyzer.
 
@@ -37,7 +37,7 @@ snake-eyes copies `interface.py`, `visibility.py`, `caller.py`, `naming.py`, `do
 *Rationale:* Gaze consumes the raw signals and runs the formula itself. Any aggregation here would pre-empt (and potentially contradict) the Go core.
 
 ### Decision: Preserve gaze-py weights verbatim
-Each extractor's weight values are copied exactly from gaze-py (e.g. the `interface` extractor yields weight `30` for an ABC/`typing.Protocol` base). Where `caller.py` buckets inbound-call counts, the bucket boundaries and their weights are preserved as-is.
+Each extractor's weight values match gaze-py's documented values exactly (e.g. the `interface` extractor yields weight `30` for an ABC/`typing.Protocol` base). Where `caller.py` buckets inbound-call counts, the bucket boundaries and their weights are preserved as-is.
 
 *Rationale:* The weights are inputs to a governance gate (Gaze's classification thresholds). Per the Gatekeeping Value Protection rule, an agent MUST NOT change gate values to make a local test pass — and there is no local scorer to satisfy anyway. Tests assert the gaze-py weights; they never redefine them.
 
@@ -56,14 +56,14 @@ gaze-py's extractors predate the 10 Python-specific `SideEffectType` values adde
 An effect type that matches no keyword or prefix SHALL return `None` (no signal) — the extractor MUST NOT raise `KeyError` on an unrecognized type. This satisfies Detection Accuracy (Principle II): ambiguity over omission, but never a crash.
 
 ### Decision: Use astroid for caller counting, over on-disk files only
-`analysis/inference.py` exposes `build_caller_index(root_path, patterns) -> CallerIndex`, which enumerates files exactly once via `_shared.ordered_file_list(root_path, patterns)` (which applies the `_shared` symlink-skip and excluded-directory guards) and then filters that enumerated list through `_shared.is_analyzable_file` to enforce the 16 MiB byte-cap and skip non-regular files **before** astroid parses any file — the byte-cap and regular-file check live in `is_analyzable_file`, not in `ordered_file_list`/`discover`, so the astroid path MUST apply that filter explicitly to honor the Constitution V resource bound. It builds a single astroid view over that bounded on-disk file set — **once per `extract_signals` invocation**, never rebuilt per function. `CallerIndex.count(module, func_name) -> int` is a pure lookup that counts `Call` nodes whose inferred callee resolves to `func_name`; the callee is matched by its **resolved defining file path** against the analyzed file set (robust to `src/` layouts), not by dotted-module-string equality (which would mismatch `derive_package`'s root-relative `src.pkg.mod` against astroid's inferred `pkg.mod`). The build uses an **isolated per-request astroid manager** (a fresh manager or `clear_cache()` at the start of each request — never the process-global `MANAGER` carried across requests) and restricts import resolution to the on-disk project (not the ambient `sys.path`) so counts are environment-independent. A thin, test-only `count_callers(root_path, module, func_name, patterns=None) -> int` wrapper builds a one-off index and does a single lookup; it is documented as rebuilding per call and is never on the per-function adapter hot path.
+`analysis/inference.py` exposes `build_caller_index(root_path, patterns) -> CallerIndex`, which enumerates files exactly once via `_shared.ordered_file_list(root_path, patterns)` (which applies the `_shared` symlink-skip and excluded-directory guards) and then filters that enumerated list through `_shared.is_analyzable_file` to enforce the 16 MiB byte-cap and skip non-regular files **before** astroid parses any file — the byte-cap and regular-file check live in `is_analyzable_file`, not in `ordered_file_list`/`discover`, so the astroid path MUST apply that filter explicitly to honor the Constitution V resource bound. It builds a single astroid view over that bounded on-disk file set — **once per `extract_signals` invocation**, never rebuilt per function. `CallerIndex.count(module, func_name) -> int` is a pure lookup that counts `Call` nodes whose inferred callee resolves to `func_name`; the callee is matched by its **resolved defining file path** against the analyzed file set (robust to `src/` layouts), not by dotted-module-string equality (which would mismatch `derive_package`'s root-relative `src.pkg.mod` against astroid's inferred `pkg.mod`). The build isolates per-request astroid state by calling `astroid.MANAGER.clear_cache()` at the start of each request (and again in a `finally` after the build, to bound resident memory), so no parsed state is carried across requests. Rather than mutating `sys.path`, the build **short-circuits inference**: it first collects the set of function names defined anywhere in the analyzed file set and only attempts astroid inference for a call site whose unqualified name is in that set. Calls into stdlib/third-party APIs are therefore never inferred, so ambient `site-packages` are not parsed in the common case (a callee that merely shares an unqualified name with an in-project function may still be inferred, and such transitive parsing is not bounded by the 16 MiB cap — a `MemoryError` there degrades the whole index to empty). Counts are further scoped by matching each resolved callee's **defining file path** against the analyzed set, so a count only ever reflects in-project callers. A thin, test-only `count_callers(root_path, module, func_name, patterns=None) -> int` wrapper builds a one-off index and does a single lookup; it is documented as rebuilding per call and is never on the per-function adapter hot path.
 
 *Rationale:* Counting inbound callers requires cross-module name resolution, which the stdlib `ast` cannot do. astroid is the pylint-maintained, Python-native inference engine — the right Principle III (Python-Native Analysis) tool.
 
 *Alternatives considered:* (a) `ast`-only textual matching of call names — rejected: cannot distinguish `foo()` in different modules, produces false counts. (b) Import the project and use `inspect`/runtime graph — rejected: violates Analysis Safety (Principle V); analyzed code is untrusted and must never be executed.
 
 ### Decision: astroid failures degrade to `caller_count = 0`
-If astroid raises any exception (`AstroidError`/`InferenceError` subclasses, plus `RecursionError`, `MemoryError`, and `OSError`), or cannot build a manager or module view, the caller index yields `0` for that function's count; if a single call site's callee resolves to `Uninferable`, that one call is omitted and counting continues. A `0` count means the `caller` extractor emits whatever its zero-bucket signal is (possibly `None`) — but never an RPC error.
+While building the index or parsing a file, a degrade-class exception (`AstroidError`/`InferenceError` subclasses, plus `RecursionError`, `MemoryError`, and `OSError`), or an inability to build a manager or module view, yields `0` for the affected counts — degrading the whole index to empty in the outer case, or skipping the offending file in the per-file case. At an individual call site, **any** inference exception — including ones outside that tuple, since astroid inference can raise `AttributeError`/`TypeError`/`KeyError`/`RuntimeError` on pathological input — or an `Uninferable` callee causes that one call to be omitted while counting continues. Each degrade path emits a one-line diagnostic to stderr. A `0` count means the `caller` extractor emits whatever its zero-bucket signal is (possibly `None`) — but never an RPC error.
 
 *Rationale:* astroid inference is best-effort on untrusted, possibly-partial source. A failure to infer is a missing signal, not a protocol failure. This keeps the method robust (Principle V) and the response well-formed (Principle I).
 
@@ -104,4 +104,4 @@ Per the constitution, spec artifacts MUST be committed before implementation, an
 
 ## Open Questions
 
-None. Issue #5 states "Do not ask clarifying questions. Every decision is already made below," and its defaults resolve every choice: emit raw signals only; lift extractors not the engine; match protocol v1.1.0 field names exactly. Exact non-`interface` weight values and `caller` bucket boundaries are whatever gaze-py defines and are preserved verbatim at implementation time (they are read from the lifted source, not invented here).
+None. Issue #5 states "Do not ask clarifying questions. Every decision is already made below," and its defaults resolve every choice: emit raw signals only; reconstruct extractors not the engine; match protocol v1.1.0 field names exactly. Exact non-`interface` weight values and `caller` bucket boundaries are the values gaze-py defines, reconstructed from its documented behavior and preserved as gate values (not invented to satisfy a local test).
