@@ -48,3 +48,10 @@ def test_unmapped_type_returns_none() -> None:
     # (routes to OTHER), never a KeyError.
     assert naming.extract("get_foo", SideEffectType.LogWrite) is None
     assert docstring.extract("writes to the log", SideEffectType.LogWrite) is None
+
+
+def test_unknown_effect_type_string_routes_to_other() -> None:
+    # A string outside the SideEffectType taxonomy exercises the ValueError
+    # guard in _routing.effect_category -> OTHER (no signal), never raising.
+    assert naming.extract("get_foo", "NotARealType") is None
+    assert docstring.extract("returns a value", "NotARealType") is None

@@ -7,7 +7,7 @@
 An accessor-style name (``get_``, ``is_``, ...) that returns a value agrees
 with the effect and weighs positively; the same name paired with a mutation
 effect contradicts it and weighs negatively (and vice versa for mutator-style
-names). Names without a recognised prefix -- or effects that route to
+names). Names without a recognized prefix -- or effects that route to
 ``OTHER`` -- produce no signal.
 """
 

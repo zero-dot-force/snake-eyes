@@ -47,9 +47,20 @@ def test_classify_signals_returns_signal_array(tmp_path: Path) -> None:
     resp = responses(_run(req("classify_signals", root_path=str(tmp_path)) + "\n"))[0]
     signals = resp["result"]["signals"]
     assert isinstance(signals, list)
+    assert signals, (
+        "expected at least one signal for a returning, documented, called function"
+    )
     for signal in signals:
         assert signal["function"]
         assert signal["package"] is not None
+        assert signal["source"] in {
+            "interface",
+            "visibility",
+            "caller_count",
+            "naming_convention",
+            "docstring",
+        }
+        assert isinstance(signal["weight"], int)
         assert isinstance(signal["reasoning"], str)
         assert signal["reasoning"]
 
