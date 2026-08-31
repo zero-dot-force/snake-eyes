@@ -79,3 +79,4 @@
 - [x] 9.5 Manually verify `uv run snake-eyes --stdio` answers `classify_signals` with protocol-shaped JSON (`signals[]` using `function`/`package`) and that `initialize` now reports `classify_signals: true` with `test_mapping`/`streaming` unchanged
 
 <!-- spec-review: passed -->
+<!-- code-review: passed -->
