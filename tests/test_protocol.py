@@ -87,7 +87,7 @@ def test_initialize_result_schema() -> None:
     assert result["capabilities"] == {
         "discover": True,
         "test_mapping": False,
-        "classify_signals": False,
+        "classify_signals": True,
         "streaming": False,
     }
 

@@ -5,7 +5,7 @@ description = "Python side-effect analyzer backend for Gaze (JSON-RPC 2.0 extern
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-dependencies = ["coverage>=7.0,<8"]
+dependencies = ["astroid>=3.0,<4", "coverage>=7.0,<8"]
 
 [project.scripts]
 snake-eyes = "snake_eyes.__main__:main"
