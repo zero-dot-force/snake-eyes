@@ -13,7 +13,7 @@ into one of six ``assertion_type`` values:
 ``equality | comparison | identity | membership | error_check | generic``
 
 Public API:
-- ``collect_assertions(func_node, test_file_rel, root_path) -> list[AssertionInfo]``
+- ``collect_assertions(func_node, rel_path) -> list[AssertionInfo]``
 """
 
 from __future__ import annotations

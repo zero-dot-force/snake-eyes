@@ -5,7 +5,7 @@
 Snake Eyes is a Gaze-spawned subprocess. It speaks JSON-RPC 2.0 over stdin/stdout
 (protocol v1.1.0). Gaze owns the CLI, scoring, and reports.
 
-## Current status (v0.2.0)
+## Current status (v0.1.0)
 
 | Method | Status |
 |--------|--------|

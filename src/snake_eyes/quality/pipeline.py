@@ -159,13 +159,17 @@ def run_test_mapping(
     if not test_functions or not target_records:
         return []
 
-    # 4. Pair tests to production functions
+    # 4. Pair tests to production functions.
+    # The graph node set includes BOTH source AND test files so that test-file
+    # nodes have outgoing edges for transitive BFS (strategy 3).  Target
+    # candidacy is still restricted to source-only `target_records` above.
+    graph_files = list(disc.source_files) + list(disc.test_files)
     pairs = pair_tests(
         test_functions=test_functions,
         target_records=target_records,
         test_trees=test_trees,
         root_abs=str(root),
-        all_source_files=list(disc.source_files),
+        graph_files=graph_files,
     )
 
     if not pairs:

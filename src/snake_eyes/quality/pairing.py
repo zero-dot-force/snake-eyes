@@ -18,7 +18,8 @@ Three-strategy, first-match-wins pairing:
    → confidence 75; built once per ``run_test_mapping`` request (lazy).
 
 Public API:
-- ``pair_tests(test_functions, target_records, test_trees) -> list[PairedResult]``
+- ``pair_tests(test_functions, target_records, test_trees, root_abs,
+  graph_files) -> list[PairedResult]``
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from astroid import nodes as astroid_nodes
 from astroid.exceptions import AstroidError  # type: ignore[import-untyped]
 from astroid.util import Uninferable  # type: ignore[import-untyped]
 
-from ..analysis._shared import derive_package
+from ..analysis._shared import derive_package, is_analyzable_file
 
 if TYPE_CHECKING:
     from ..analysis.models import FunctionRecord
@@ -192,7 +193,7 @@ def _normalize_path(p: str) -> str:
 
 def _build_call_graph(
     root_abs: str,
-    all_source_files: list[str],
+    graph_files: list[str],
 ) -> _CallGraph | None:
     """Build an astroid call graph; return None on any degrade."""
     try:
@@ -205,8 +206,10 @@ def _build_call_graph(
 
         root = pathlib.Path(root_abs)
 
-        for rel in all_source_files:
+        for rel in graph_files:
             abs_path = root / rel
+            if not is_analyzable_file(abs_path, label=rel):
+                continue
             try:
                 modname = derive_package(rel)
                 module = manager.ast_from_file(str(abs_path), modname, source=True)
@@ -224,6 +227,20 @@ def _build_call_graph(
 
         analyzed_norms: set[str] = {norm for norm, _ in parsed}
 
+        # Build the set of function/method names defined anywhere in the analyzed
+        # project.  Inference is attempted only for call sites whose unqualified
+        # callee name is in this set, so astroid does not parse ambient
+        # stdlib/site-packages modules (which bypass the 16 MiB byte-cap) to
+        # resolve external callees that would never produce an in-project edge.
+        # Mirrors analysis/inference.py _build() defined_names pattern.
+        modules = [module for _, module in parsed]
+        defined_names: set[str] = set()
+        for module in modules:
+            for func in module.nodes_of_class(
+                (astroid_nodes.FunctionDef, astroid_nodes.AsyncFunctionDef)
+            ):
+                defined_names.add(func.name)
+
         for source_norm, module in parsed:
             try:
                 call_iter = module.nodes_of_class(astroid_nodes.Call)
@@ -238,9 +255,21 @@ def _build_call_graph(
                     callee_name = fn.attrname
                 if callee_name is None:
                     continue
+                # Pre-filter: skip callee names not defined in the project.
+                # Bounds transitive parsing to in-project resolution and removes
+                # the infer-then-discard waste for external (pytest/mock/stdlib)
+                # call sites.
+                if callee_name not in defined_names:
+                    continue
                 try:
                     inferred = list(call.func.infer())
-                except Exception:
+                except Exception as exc:
+                    print(
+                        f"snake-eyes: test_mapping strategy-3 skipping"
+                        f" uninferable call site {callee_name!r}:"
+                        f" {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
                     continue
                 for candidate in inferred:
                     try:
@@ -260,14 +289,19 @@ def _build_call_graph(
                         callee_norm = _normalize_path(callee_file)
                         if callee_norm in analyzed_norms:
                             edges.setdefault(source_norm, set()).add(callee_norm)
-                    except Exception:
+                    except Exception as exc:
+                        print(
+                            f"snake-eyes: test_mapping strategy-3 skipping candidate:"
+                            f" {type(exc).__name__}: {exc}",
+                            file=sys.stderr,
+                        )
                         continue
 
         return _CallGraph(edges=edges)
 
     except FileNotFoundError:
         raise
-    except (AstroidError, RecursionError, MemoryError) as exc:
+    except _STRATEGY3_DEGRADE as exc:
         print(
             f"snake-eyes: test_mapping strategy-3 call graph build failed:"
             f" {type(exc).__name__}: {exc}",
@@ -287,13 +321,20 @@ def _transitive_match(
     test_file_norm: str,
     call_graph: _CallGraph,
     target_records: list[FunctionRecord],
+    root_abs: str,
     depth_limit: int = 5,
 ) -> list[tuple[FunctionRecord, int]]:
-    """Match via BFS call graph reachability, confidence 75."""
+    """Match via BFS call graph reachability, confidence 75.
+
+    *root_abs* is used to resolve root-relative ``rec.file`` paths to absolute
+    paths before normalizing, so the lookup is CWD-independent.
+    """
     reachable = call_graph.reachable_files(test_file_norm, depth_limit)
     results: list[tuple[FunctionRecord, int]] = []
+    root = pathlib.Path(root_abs)
     for rec in target_records:
-        rec_norm = _normalize_path(rec.file)
+        # rec.file is always root-relative in production; resolve via root_abs.
+        rec_norm = _normalize_path(str(root / rec.file))
         if rec_norm in reachable:
             results.append((rec, 75))
     return results
@@ -309,7 +350,7 @@ def pair_tests(
     target_records: list[FunctionRecord],
     test_trees: dict[str, ast.Module],  # test_file -> AST
     root_abs: str,
-    all_source_files: list[str],
+    graph_files: list[str],
 ) -> list[PairedResult]:
     """Pair test functions to production functions using three strategies.
 
@@ -326,7 +367,7 @@ def pair_tests(
         nonlocal _graph
         if _graph is False:
             try:
-                _graph = _build_call_graph(root_abs, all_source_files)
+                _graph = _build_call_graph(root_abs, graph_files)
             except FileNotFoundError:
                 raise
             except Exception as exc:
@@ -362,7 +403,9 @@ def pair_tests(
                     graph = _get_graph()
                     if graph is not None:
                         test_abs = str((pathlib.Path(root_abs) / test_file).resolve())
-                        paired = _transitive_match(test_abs, graph, target_records)
+                        paired = _transitive_match(
+                            test_abs, graph, target_records, root_abs
+                        )
                 except FileNotFoundError:
                     raise
                 except Exception as exc:
@@ -389,11 +432,11 @@ def pair_tests(
                     )
                 )
     finally:
-        # Release astroid cache after the request; bounds memory in long-lived server
-        if not isinstance(_graph, bool) and _graph is not None:
-            try:
-                astroid.MANAGER.clear_cache()
-            except Exception:  # pragma: no cover
-                pass
+        # Release astroid cache after the request; bounds memory in long-lived server.
+        # Clear unconditionally — a clear on an untouched manager is a cheap no-op.
+        try:
+            astroid.MANAGER.clear_cache()
+        except Exception:  # pragma: no cover
+            pass
 
     return results
