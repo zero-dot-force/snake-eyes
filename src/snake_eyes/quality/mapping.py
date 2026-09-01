@@ -36,7 +36,9 @@ def infer_side_effect_type(
     - ``error_check``: ``ErrorReturn`` if present, else ``ErrorSignal`` if
       present, else ``"ErrorReturn"`` (fallback).
     - ``equality``/``comparison``/``identity``/``membership``: ``ReturnValue``
-      if present, else first P0 effect, else ``"ReturnValue"`` (fallback).
+      if present, else first P0 effect, else ``GeneratorYield`` if present,
+      else ``AsyncGeneratorYield`` if present, else ``"ReturnValue"``
+      (fallback).
     - ``generic``: first detected effect if any, else ``"ReturnValue"``
       (fallback).
     """
@@ -65,6 +67,13 @@ def infer_side_effect_type(
             except ValueError:
                 # Unknown type string — safe fallback per spec
                 continue
+        # Generator yield (P1/P2) — before ReturnValue fallback
+        gen_yield = _effect_type_str(SideEffectType.GeneratorYield)
+        if gen_yield in effect_types:
+            return gen_yield
+        async_gen_yield = _effect_type_str(SideEffectType.AsyncGeneratorYield)
+        if async_gen_yield in effect_types:
+            return async_gen_yield
         return ret_val
 
     # generic

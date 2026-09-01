@@ -631,6 +631,67 @@ class TestEffectTypeInference:
         # Falls through to ReturnValue fallback
         assert result == str(SideEffectType.ReturnValue)
 
+    # -- Generator-aware value-type chain (issue #13) ----------------------
+
+    @pytest.mark.parametrize("atype", ["equality", "membership"])
+    def test_value_generator_yield_only(self, atype: str) -> None:
+        """Regression test for issue #13: GeneratorYield must not fall back to
+        ReturnValue.  On unfixed code this returns 'ReturnValue'."""
+        effects = (self._effect(SideEffectType.GeneratorYield),)
+        result = infer_side_effect_type(atype, effects)
+        assert result == str(SideEffectType.GeneratorYield)
+
+    @pytest.mark.parametrize("atype", ["equality", "membership"])
+    def test_value_async_generator_yield_only(self, atype: str) -> None:
+        """AsyncGeneratorYield variant of the issue #13 regression test.
+        On unfixed code this returns 'ReturnValue'."""
+        effects = (self._effect(SideEffectType.AsyncGeneratorYield),)
+        result = infer_side_effect_type(atype, effects)
+        assert result == str(SideEffectType.AsyncGeneratorYield)
+
+    def test_value_return_value_beats_generator_yield(self) -> None:
+        """ReturnValue takes precedence over GeneratorYield (both present)."""
+        effects = (
+            self._effect(SideEffectType.GeneratorYield),
+            self._effect(SideEffectType.ReturnValue),
+        )
+        result = infer_side_effect_type("equality", effects)
+        assert result == str(SideEffectType.ReturnValue)
+
+    def test_value_p0_beats_generator_yield(self) -> None:
+        """P0 effect (not ReturnValue) takes precedence over GeneratorYield."""
+        effects = (
+            self._effect(SideEffectType.GeneratorYield),
+            self._effect(SideEffectType.ReceiverMutation),
+        )
+        result = infer_side_effect_type("membership", effects)
+        assert result == str(SideEffectType.ReceiverMutation)
+
+    def test_value_no_effects_fallback_unchanged(self) -> None:
+        """Empty effects still falls back to ReturnValue (unchanged)."""
+        result = infer_side_effect_type("comparison", ())
+        assert result == str(SideEffectType.ReturnValue)
+
+    def test_generic_generator_yield_first_effect(self) -> None:
+        """Generic chain returns first effect — regression guard confirming
+        generic chain returns first effect, not a generator-specific lookup."""
+        effects = (
+            self._effect(SideEffectType.GeneratorYield),
+            self._effect(SideEffectType.GlobalMutation),
+        )
+        result = infer_side_effect_type("generic", effects)
+        assert result == str(SideEffectType.GeneratorYield)
+
+    def test_value_generator_yield_beats_async_generator_yield(self) -> None:
+        """GeneratorYield takes precedence over AsyncGeneratorYield when both
+        are present (no ReturnValue, no P0)."""
+        effects = (
+            self._effect(SideEffectType.AsyncGeneratorYield),
+            self._effect(SideEffectType.GeneratorYield),
+        )
+        result = infer_side_effect_type("equality", effects)
+        assert result == str(SideEffectType.GeneratorYield)
+
 
 # ---------------------------------------------------------------------------
 # 8.5 Pipeline on sample_project
