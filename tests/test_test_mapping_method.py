@@ -29,7 +29,6 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 import pytest
@@ -59,18 +58,6 @@ def _run_server(raw: str) -> str:
         server.run()
     assert exc.value.code == 0
     return stdout.getvalue()
-
-
-def _make_func_record(
-    name: str,
-    package: str = "pkg",
-    file: str = "pkg/mod.py",
-    line: int = 1,
-    effects: tuple[Effect, ...] = (),
-) -> FunctionRecord:
-    return FunctionRecord(
-        name=name, package=package, file=file, line=line, side_effects=effects
-    )
 
 
 def _parse_func(source: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
@@ -222,11 +209,54 @@ class TestPairing:
             assert 0 <= p.confidence <= 100
 
     def test_confidence_range_all_strategies(self, tmp_path: Path) -> None:
-        """All valid confidence values are in [0, 100]."""
-        valid = {90, 80, 75, 70}
-        for conf in valid:
-            assert isinstance(conf, int)
-            assert 0 <= conf <= 100
+        """Confidence values produced by all three strategies are integers in [0, 100].
+
+        Drives real pair_tests calls to observe actual strategy outputs.
+        """
+        # Strategy 1 exact (90)
+        (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
+        rec_exact = FunctionRecord(
+            name="add", package=derive_package("m.py"), file="m.py", line=1
+        )
+        tree_exact = ast.parse("def test_add():\n    assert True\n")
+        pairs_90 = pair_tests(
+            [("test_add", "test_m.py")],
+            [rec_exact],
+            {"test_m.py": tree_exact},
+            str(tmp_path),
+            ["m.py"],
+        )
+        # Strategy 1 case-only (70)
+        tree_70 = ast.parse("def test_Add():\n    assert True\n")
+        pairs_70 = pair_tests(
+            [("test_Add", "test_m.py")],
+            [rec_exact],
+            {"test_m.py": tree_70},
+            str(tmp_path),
+            ["m.py"],
+        )
+        # Strategy 2 direct call (80)
+        src_80 = "def test_it():\n    add(1, 2)\n    assert True\n"
+        tree_80 = ast.parse(src_80)
+        (tmp_path / "test_m.py").write_text(src_80)
+        pairs_80 = pair_tests(
+            [("test_it", "test_m.py")],
+            [rec_exact],
+            {"test_m.py": tree_80},
+            str(tmp_path),
+            ["m.py"],
+        )
+        all_pairs = pairs_90 + pairs_70 + pairs_80
+        for p in all_pairs:
+            assert isinstance(p.confidence, int), (
+                f"confidence must be int, got {type(p.confidence)}"
+            )
+            assert 0 <= p.confidence <= 100, f"confidence {p.confidence} out of range"
+        confidences = {p.confidence for p in all_pairs}
+        # Should observe at least 90 and 70 from strategy 1, and 80 from strategy 2
+        assert 90 in confidences, f"Expected 90 in confidences, got {confidences}"
+        assert 70 in confidences, f"Expected 70 in confidences, got {confidences}"
+        assert 80 in confidences, f"Expected 80 in confidences, got {confidences}"
 
 
 # ---------------------------------------------------------------------------
@@ -237,65 +267,54 @@ class TestPairing:
 class TestStrategy3BFS:
     """8.2 — strategy-3 BFS depth 5 pairs, depth 6 does not."""
 
-    def _make_chain_project(self, tmp_path: Path, depth: int) -> tuple[str, str]:
-        """Create a call chain: test -> f1 -> f2 -> ... -> target.
+    def test_strategy3_transitive_across_files_real_pipeline(
+        self, tmp_path: Path
+    ) -> None:
+        """HIGH-1: strategy 3 pairs via transitive call chain across separate files.
 
-        Returns (test_file_rel, target_name).
+        Only strategy 3 (transitive BFS) can pair test_nothing → target.
+        Drives the real ``run_test_mapping`` (no hand-built _CallGraph injection).
+
+        Layout:
+          target_mod.py (SOURCE): target()           <- production target
+          tests/helpers.py (TEST file, non-source):  helper() -> target()
+          tests/test_main.py (TEST file):            test_nothing() -> helper()
+
+        ``target_records`` contains only ``target`` (source files only).
+        Strategy 1 fails: 'test_nothing' has no name-convention match to 'target'.
+        Strategy 2 fails: test_nothing calls helper(), which is NOT in target_records.
+        Strategy 3 must pair test_main.py → helpers.py → target_mod.py → target
+        with confidence 75.
         """
-        target_name = f"f{depth}"
-        # Create production file with all functions
-        lines = []
-        for i in range(1, depth + 1):
-            if i < depth:
-                lines.append(f"def f{i}():\n    return f{i + 1}()\n")
-            else:
-                lines.append(f"def f{i}():\n    return 42\n")
-        (tmp_path / "chain.py").write_text("\n".join(lines) + "\n")
-        # Test file calls f1
-        test_src = "def test_chain():\n    f1()\n    assert True\n"
-        (tmp_path / "test_chain.py").write_text(test_src)
-        return "test_chain.py", target_name
-
-    def _build_mock_graph_pairs(self, tmp_path: Path, depth: int) -> list[Any]:
-        """Use pair_tests with a tiny on-disk project astroid can parse."""
-        from snake_eyes.analysis.models import FunctionRecord
-        from snake_eyes.quality.pairing import pair_tests
-
-        test_file, target = self._make_chain_project(tmp_path, depth)
-        target_rec = FunctionRecord(
-            name=target,
-            package=derive_package("chain.py"),
-            file="chain.py",
-            line=1,
+        (tmp_path / "target_mod.py").write_text("def target():\n    return 42\n")
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        # helpers.py lives in tests/ so it is discovered as a test file, NOT a source
+        # file, and its helper() function is never added to target_records.
+        (tests_dir / "helpers.py").write_text(
+            "from target_mod import target\n\n\ndef helper():\n    return target()\n"
         )
-        test_src = (tmp_path / test_file).read_text()
-        tree = ast.parse(test_src)
-        return pair_tests(
-            [("test_chain", test_file)],
-            [target_rec],
-            {test_file: tree},
-            str(tmp_path),
-            ["chain.py"],
+        # test_main.py: test_nothing calls helper() (not target directly)
+        (tests_dir / "test_main.py").write_text(
+            "from tests.helpers import helper\n"
+            "\n"
+            "\n"
+            "def test_nothing():\n"
+            "    helper()\n"
+            "    assert True\n"
         )
 
-    def test_strategy3_depth_5_pairs(self, tmp_path: Path) -> None:
-        """Target reachable within 5 hops pairs (if astroid works)."""
-        # We test with depth=4 (4 hops: test->f1->f2->f3->f4) to be safe
-        pairs = self._build_mock_graph_pairs(tmp_path, 4)
-        # If astroid is unavailable or fails, we accept 0 pairs (strategy 3 optional)
-        for p in pairs:
-            assert isinstance(p.confidence, int)
-            assert p.confidence in (75, 80, 90, 70)
-
-    def test_strategy3_depth_6_does_not_pair(self, tmp_path: Path) -> None:
-        """Target at 7 hops does not pair via strategy 3."""
-        # With depth=7, strategy 3's BFS depth_limit=5 won't reach f7
-        # Name match: test_chain doesn't match f7, direct call is f1 (not f7)
-        pairs = self._build_mock_graph_pairs(tmp_path, 7)
-        # f7 should not appear in pairs if only strategy 3 could reach it
-        for p in pairs:
-            # If paired at all it should be via strategy 2 (f1) not strategy 3 (f7)
-            assert p.target_function in ("f1", "f7") or p.confidence in (75, 80)
+        rows = run_test_mapping(str(tmp_path), None)
+        target_rows = [r for r in rows if r["target_function"] == "target"]
+        # Strategy 3 must have found target via transitive BFS.
+        assert target_rows, (
+            "Strategy 3 failed to pair test_nothing -> helper -> target. "
+            "Verify test files are included in the graph node set (HIGH-1 fix)."
+        )
+        for row in target_rows:
+            assert row["confidence"] == 75, (
+                f"Expected confidence 75 for transitive pair, got {row['confidence']}"
+            )
 
     def test_strategy3_degrade_no_internal_error(self, tmp_path: Path) -> None:
         """Strategy-3 failure degrades gracefully without surfacing -32603."""
@@ -572,6 +591,26 @@ class TestEffectTypeInference:
         result = infer_side_effect_type("equality", effects)
         assert result == str(SideEffectType.ReceiverMutation)
 
+    def test_value_no_ReturnValue_first_P0_not_first_effect(self) -> None:
+        """Non-P0 effect first, P0 second — must return the P0, not the first."""
+        from snake_eyes.analysis.effects import TIER_MAP, Tier
+
+        # Find a non-P0 effect type to put first
+        non_p0_type = next(
+            et
+            for et in SideEffectType
+            if TIER_MAP.get(et) != Tier.P0 and et not in (SideEffectType.ReturnValue,)
+        )
+        p0_type = SideEffectType.ReceiverMutation  # known P0
+        assert TIER_MAP.get(p0_type) == Tier.P0
+        effects = (
+            self._effect(non_p0_type),  # non-P0 first
+            self._effect(p0_type),  # P0 second
+        )
+        result = infer_side_effect_type("equality", effects)
+        # Must be the P0 effect, not the non-P0 that came first
+        assert result == str(p0_type), f"Expected first P0 ({p0_type}), got {result!r}"
+
     def test_value_fallback_ReturnValue(self) -> None:
         result = infer_side_effect_type("equality", ())
         assert result == str(SideEffectType.ReturnValue)
@@ -626,16 +665,42 @@ class TestPipeline:
         funcs = {r["test_function"] for r in rows}
         assert any("test_inc" in f for f in funcs)
 
-    def test_numeric_ordering_not_lexicographic(self) -> None:
-        """Assertions spanning lines 2 and 10 are ordered numerically, not lexically."""
-        rows = run_test_mapping(str(SAMPLE_PROJECT), None)
-        multi = [r for r in rows if r["test_function"] == "test_multi_assertion"]
-        if len(multi) >= 2:
-            # Extract line numbers from assertion_location ("path:line")
-            lines = [int(r["assertion_location"].split(":")[-1]) for r in multi]
-            assert lines == sorted(lines), f"Lines not sorted numerically: {lines}"
-            # Verify the first line < second line (not string-sorted ":10" < ":2")
-            assert lines[0] < lines[-1]
+    def test_numeric_ordering_not_lexicographic(self, tmp_path: Path) -> None:
+        """Assertions at lines 9 and 10 are ordered numerically (9<10), not lexically.
+
+        Lexicographic ordering would put "10" before "9"; numeric ordering puts 9 first.
+        This test catches string-sort regressions.
+        """
+        (tmp_path / "prod.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        # Craft a test function where assertions land on lines 9 and 10 of the file.
+        # Lines 1-8: header + padding; line 9: assert 1; line 10: assert 2.
+        lines = [
+            "def test_add():",  # line 1
+            "    _ = 1",  # line 2
+            "    _ = 2",  # line 3
+            "    _ = 3",  # line 4
+            "    _ = 4",  # line 5
+            "    _ = 5",  # line 6
+            "    _ = 6",  # line 7
+            "    _ = 7",  # line 8
+            "    assert add(1, 2) == 3",  # line 9
+            "    assert add(2, 3) == 5",  # line 10
+        ]
+        (tests / "test_prod.py").write_text("\n".join(lines) + "\n")
+        rows = run_test_mapping(str(tmp_path), None)
+        add_rows = [r for r in rows if r["target_function"] == "add"]
+        assert len(add_rows) == 2, f"Expected 2 rows, got {len(add_rows)}"
+        line_nums = [int(r["assertion_location"].split(":")[-1]) for r in add_rows]
+        # Numeric order: 9 before 10
+        assert line_nums == sorted(line_nums), (
+            f"Lines not sorted numerically: {line_nums}"
+        )
+        # Discriminating check: numeric 9 < 10, but lexicographic "10" < "9"
+        assert line_nums[0] == 9 and line_nums[1] == 10, (
+            f"Expected [9, 10], got {line_nums}"
+        )
 
     def test_target_package_equals_derive_package(self) -> None:
         """target_package matches derive_package for a fixture source file."""
@@ -643,27 +708,69 @@ class TestPipeline:
         # Find a row targeting calculator.py functions
         calc_rows = [r for r in rows if "calculator" in r["target_package"]]
         assert calc_rows, "Expected at least one row targeting calculator functions"
+        expected_package = derive_package("src/sample/calculator.py")
         for row in calc_rows:
-            # The target file should be something like src/sample/calculator.py
-            assert row["target_package"] != ""
+            assert row["target_package"] == expected_package, (
+                f"Expected target_package == {expected_package!r},"
+                f" got {row['target_package']!r}"
+            )
 
     def test_same_line_tiebreaker(self, tmp_path: Path) -> None:
-        """Two assertions on the same source line are ordered by col_offset."""
-        # Build a project where both assertions are on the same line
-        # (ruff-format would reflow them, so we write raw via write_text)
-        (tmp_path / "prod.py").write_text("def add(a, b):\n    return a + b\n")
-        # Two assertions on one line using semicolon trick — we write via AST strings
-        # Actually we just create a file with two closely-spaced assertions
-        # The key is that they have distinct col_offsets if on the same line:
-        # We construct this programmatically since ruff-format won't touch tmp_path
-        test_src = "def test_add():\n    assert 1 + 1 == 2; assert 2 + 2 == 4  # noqa\n"
-        (tmp_path / "test_prod.py").write_text(test_src)
+        """Col-offset tiebreaker is genuinely exercised: 4 rows, 2 packages.
+
+        Layout:
+          pkg_a/calc.py  def add(a, b)
+          pkg_b/calc.py  def add(a, b)
+          tests/test_calc.py
+              def test_add():
+                  assert add(1,1)==2; assert add(1,1) in (2,)  # noqa: E702
+
+        Each assert on the single physical line pairs to ``add`` in BOTH
+        packages → 4 rows sharing (test_file, test_function, assertion_line).
+
+        With the _col sort key the sequence groups col-first:
+            equality / equality / membership / membership
+        Without _col it would group by target_package order:
+            equality / membership / equality / membership   (or similar)
+
+        This confirms the _col component is load-bearing.
+        """
+        # Two packages each defining add
+        pkg_a = tmp_path / "pkg_a"
+        pkg_a.mkdir()
+        (pkg_a / "__init__.py").write_text("")
+        (pkg_a / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        pkg_b = tmp_path / "pkg_b"
+        pkg_b.mkdir()
+        (pkg_b / "__init__.py").write_text("")
+        (pkg_b / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        # Two assertions on ONE physical line.  The semicolon is deliberate and
+        # safe (ruff-format doesn't reformat files in tmp_path).
+        test_src = (
+            "def test_add():\n"
+            "    assert add(1,1)==2; assert add(1,1) in (2,)  # noqa: E702\n"
+        )
+        (tests / "test_calc.py").write_text(test_src)
+
         rows = run_test_mapping(str(tmp_path), None)
         add_rows = [r for r in rows if r["target_function"] == "add"]
-        if len(add_rows) >= 2:
-            # Both on same line — ordered by col_offset
-            lines = [int(r["assertion_location"].split(":")[-1]) for r in add_rows]
-            assert lines == sorted(lines)
+
+        # With two packages, strategy-1 name-match fires for both → 4 rows
+        assert len(add_rows) == 4, (
+            f"Expected 4 rows (2 assertions × 2 packages),"
+            f" got {len(add_rows)}: {add_rows}"
+        )
+
+        # The _col tiebreaker means all col-0 rows (equality) come before all
+        # col-N rows (membership), regardless of target_package insertion order.
+        types = [r["assertion_type"] for r in add_rows]
+        assert types == ["equality", "equality", "membership", "membership"], (
+            f"Expected col-sorted sequence"
+            f" ['equality','equality','membership','membership'],"
+            f" got {types}"
+        )
 
     def test_two_package_disambiguation(self, tmp_path: Path) -> None:
         """8.14 — two packages each defining add yield one row per package."""
@@ -683,6 +790,37 @@ class TestPipeline:
         # Should have rows for both packages
         packages = {r["target_package"] for r in add_rows}
         assert len(packages) >= 2
+
+    def test_helper_in_test_module_never_a_target_pipeline(
+        self, tmp_path: Path
+    ) -> None:
+        """MED-D: test-file helper with same name as source function is never a target.
+
+        The pipeline filters targets to source_files only, so a helper ``add``
+        defined in the test file must never appear as a target row.
+        """
+        (tmp_path / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        # Test file defines both test_add() AND a helper add() with the same name
+        (tests / "test_calc.py").write_text(
+            "def add(a, b):\n"
+            "    return a + b\n"
+            "\n"
+            "\n"
+            "def test_add():\n"
+            "    assert add(1, 2) == 3\n"
+        )
+        rows = run_test_mapping(str(tmp_path), None)
+        add_rows = [r for r in rows if r["target_function"] == "add"]
+        assert add_rows, "Expected at least one row pairing test_add to source add"
+        expected_pkg = derive_package("calc.py")
+        # Every row must point to the SOURCE module (calc.py), never the test file
+        for row in add_rows:
+            assert row["target_package"] == expected_pkg, (
+                f"target_package should be {expected_pkg!r},"
+                f" got {row['target_package']!r} — test-file add must never be a target"
+            )
 
     def test_empty_result_no_pairs(self, tmp_path: Path) -> None:
         """Pipeline returns [] for a project with test files but no pairs."""
@@ -908,8 +1046,8 @@ class TestAstroidCacheIsolation:
         # Results should be independent
         funcs1 = {r["target_function"] for r in rows1}
         funcs2 = {r["target_function"] for r in rows2}
-        assert "add" in funcs1 or rows1 == []
-        assert "multiply" in funcs2 or rows2 == []
+        assert "add" in funcs1
+        assert "multiply" in funcs2
         # No cross-contamination: multiply should not appear in rows1
         assert "multiply" not in funcs1
         assert "add" not in funcs2
@@ -1400,13 +1538,14 @@ class TestPairingCoverage2:
         norm_test = str((tmp_path / "test_prod.py").resolve())
 
         graph = _CallGraph(edges={norm_test: {norm_prod}})
+        # Use a root-relative file path — consistent with production behaviour.
         rec = FunctionRecord(
             name="add",
             package=derive_package("prod.py"),
-            file=str(f),
+            file="prod.py",
             line=1,
         )
-        results = _transitive_match(norm_test, graph, [rec])
+        results = _transitive_match(norm_test, graph, [rec], str(tmp_path))
         assert any(r[1] == 75 for r in results)
 
     def test_strategy3_finalizer_clears_cache_on_success(self, tmp_path: Path) -> None:
@@ -1427,9 +1566,8 @@ class TestPairingCoverage2:
 
         with mock.patch.object(_astroid.MANAGER, "clear_cache", spy_clear):
             run_test_mapping(str(tmp_path), None)
-        # Should have been called at least once (start of build or finally)
-        # We don't assert count since strategy-3 may not trigger
-        assert isinstance(clear_calls, list)
+        # finally-clear is unconditional, so clear_calls must be non-empty.
+        assert clear_calls
 
     def test_build_call_graph_with_parseable_project(self, tmp_path: Path) -> None:
         """_build_call_graph runs on a tiny parseable project."""
@@ -1503,11 +1641,12 @@ class TestPairingStrategy3Paths:
         norm_prod = str(prod_file.resolve())
         graph = _CallGraph(edges={norm_test: {norm_prod}})
 
-        # Use norm_prod as the file path in the record so _normalize_path matches
+        # Use a root-relative file path — consistent with production behaviour.
+        # _transitive_match resolves it via root_abs / rec.file.
         rec = FunctionRecord(
             name="compute",
             package=derive_package("prod.py"),
-            file=norm_prod,
+            file="prod.py",
             line=1,
         )
         # test_nothing: no name match, no direct call to compute

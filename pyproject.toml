@@ -51,3 +51,4 @@ branch = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=snake_eyes --cov-report=term-missing --cov-fail-under=85"
+markers = ["slow: marks tests that spawn subprocesses (deselect with -m 'not slow')"]
