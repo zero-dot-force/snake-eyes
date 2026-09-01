@@ -92,3 +92,4 @@
 - [x] 10.8 Constitution check — confirm PASS for all five principles (Protocol Fidelity, Detection Accuracy, Python-Native Analysis, Testability, Analysis Safety)
 
 <!-- spec-review: passed -->
+<!-- code-review: passed -->
