@@ -5,7 +5,7 @@
 Snake Eyes is a Gaze-spawned subprocess. It speaks JSON-RPC 2.0 over stdin/stdout
 (protocol v1.1.0). Gaze owns the CLI, scoring, and reports.
 
-## Current status (v0.1.0)
+## Current status (v0.2.0)
 
 | Method | Status |
 |--------|--------|
@@ -16,13 +16,15 @@ Snake Eyes is a Gaze-spawned subprocess. It speaks JSON-RPC 2.0 over stdin/stdou
 | `complexity` | Implemented |
 | `coverage` | Implemented |
 | `classify_signals` | Implemented |
+| `test_mapping` | Implemented |
 
-Capability flags advertised at handshake: `discover` and
-`classify_signals` are `true`; `test_mapping` and `streaming` are `false`.
-Side-effect detection and classification-signal extraction are
-implemented. coverage.py (`>=7.0,<8`) and astroid (`>=3.0,<4`,
-caller-count inference) are runtime dependencies (shipped). `radon` is
-not used — cyclomatic complexity is computed via a lifted McCabe
+Capability flags advertised at handshake: `discover`, `classify_signals`,
+and `test_mapping` are `true`; `streaming` is `false`.
+Side-effect detection, classification-signal extraction, and
+test-to-assertion mapping are implemented. coverage.py (`>=7.0,<8`) and
+astroid (`>=3.0,<4`, caller-count inference and strategy-3 transitive-call
+pairing in `quality/pairing.py`) are runtime dependencies (shipped).
+`radon` is not used — cyclomatic complexity is computed via a lifted McCabe
 implementation (no radon dependency).
 
 ## Installation
@@ -66,16 +68,22 @@ snake-eyes/
 │   │   ├── detector.py      # Python side-effect detector (analyze method)
 │   │   ├── complexity.py    # McCabe cyclomatic complexity (complexity method)
 │   │   └── inference.py     # astroid caller-count inference (classify_signals)
-│   └── signals/
-│       ├── __init__.py
-│       ├── interface.py     # interface source extractor (reconstructed from gaze-py)
-│       ├── visibility.py    # visibility source extractor (reconstructed from gaze-py)
-│       ├── caller.py        # caller_count source extractor (reconstructed from gaze-py)
-│       ├── naming.py        # naming_convention source extractor (reconstructed from gaze-py)
-│       ├── docstring.py     # docstring source extractor (reconstructed from gaze-py)
-│       ├── _routing.py      # effect-type → category routing (reconstructed from gaze-py)
-│       ├── _types.py        # SignalResult value type
-│       └── adapter.py       # extract_signals fan-out (classify_signals method)
+│   ├── signals/
+│   │   ├── __init__.py
+│   │   ├── interface.py     # interface source extractor (reconstructed from gaze-py)
+│   │   ├── visibility.py    # visibility source extractor (reconstructed from gaze-py)
+│   │   ├── caller.py        # caller_count source extractor (reconstructed from gaze-py)
+│   │   ├── naming.py        # naming_convention source extractor (reconstructed from gaze-py)
+│   │   ├── docstring.py     # docstring source extractor (reconstructed from gaze-py)
+│   │   ├── _routing.py      # effect-type → category routing (reconstructed from gaze-py)
+│   │   ├── _types.py        # SignalResult value type
+│   │   └── adapter.py       # extract_signals fan-out (classify_signals method)
+│   └── quality/
+│       ├── __init__.py      # re-exports run_test_mapping
+│       ├── pairing.py       # test-function pairing (3 strategies, lifted from gaze-py)
+│       ├── assertions.py    # assertion detection & classification (lifted from gaze-py)
+│       ├── mapping.py       # side-effect-type inference (test_mapping method)
+│       └── pipeline.py      # run_test_mapping orchestration (test_mapping method)
 ├── tests/
 ├── pyproject.toml
 └── NOTICE
@@ -85,6 +93,8 @@ Delivered in issue #4: `detector.py`, `complexity.py`, `coverage.py`, `_shared.p
 and the `analyze`, `complexity`, and `coverage` JSON-RPC methods.
 Delivered in issue #5: the `signals/` extractors, `analysis/inference.py`
 (astroid caller-count inference), and the `classify_signals` JSON-RPC method.
+Delivered in issue #6: the `quality/` package (`pairing.py`, `assertions.py`,
+`mapping.py`, `pipeline.py`), and the `test_mapping` JSON-RPC method.
 
 ## Limits & Troubleshooting
 
@@ -109,7 +119,8 @@ invalid, the `coverage` method returns an empty result (`[]`), never an error.
 ## License
 
 Apache 2.0 -- see [LICENSE](LICENSE). Portions of `detector.py`,
-`complexity.py`, and the `signals/` extractors (`interface.py`, `visibility.py`,
-`caller.py`, `naming.py`, `docstring.py`, `_routing.py`) are lifted or
-reconstructed from gaze-py under Apache-2.0; see [NOTICE](NOTICE) for
+`complexity.py`, `quality/pairing.py`, `quality/assertions.py`, and the
+`signals/` extractors (`interface.py`, `visibility.py`, `caller.py`,
+`naming.py`, `docstring.py`, `_routing.py`) are lifted or reconstructed from
+gaze-py (Copyright Matt Peter, Apache 2.0); see [NOTICE](NOTICE) for
 attribution.

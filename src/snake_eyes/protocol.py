@@ -75,8 +75,8 @@ def initialize_result() -> dict[str, Any]:
     Returns a plain dict with the exact keys ``analyzer_name``,
     ``language``, ``language_version`` (from ``sys.version_info``),
     ``protocol_version`` (``"1.1.0"``), and ``capabilities`` with all four
-    flags present (``discover`` and ``classify_signals`` ``True``;
-    ``test_mapping`` and ``streaming`` ``False``).
+    flags present (``discover``, ``classify_signals``, and ``test_mapping``
+    ``True``; ``streaming`` ``False``).
     """
     major, minor, micro = sys.version_info[:3]
     return {
@@ -86,7 +86,7 @@ def initialize_result() -> dict[str, Any]:
         "protocol_version": PROTOCOL_VERSION,
         "capabilities": {
             "discover": True,
-            "test_mapping": False,
+            "test_mapping": True,
             "classify_signals": True,
             "streaming": False,
         },
