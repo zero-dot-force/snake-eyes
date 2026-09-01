@@ -38,7 +38,7 @@ def test_initialize_advertises_classify_signals(tmp_path: Path) -> None:
     resp = responses(_run(req("initialize", root_path=str(tmp_path)) + "\n"))[0]
     caps = resp["result"]["capabilities"]
     assert caps["classify_signals"] is True
-    assert caps["test_mapping"] is False
+    assert caps["test_mapping"] is True
     assert caps["streaming"] is False
 
 

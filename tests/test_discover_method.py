@@ -83,6 +83,6 @@ def test_initialize_reports_discover_true() -> None:
     assert response["result"] == initialize_result()
     capabilities = response["result"]["capabilities"]
     assert capabilities["discover"] is True
-    assert capabilities["test_mapping"] is False
+    assert capabilities["test_mapping"] is True
     assert capabilities["classify_signals"] is True
     assert capabilities["streaming"] is False

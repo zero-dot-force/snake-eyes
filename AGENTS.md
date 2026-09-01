@@ -63,7 +63,7 @@ subprocess. The division of responsibility:
 - Python-specific classification signals
 - Coverage data parsing (coverage.py)
 - Cyclomatic complexity calculation (lifted gaze-py McCabe; no radon)
-- Test-to-assertion mapping (pytest)
+- Test-to-assertion mapping (pytest and unittest)
 - File and project discovery
 
 ## Technology Stack
@@ -73,7 +73,8 @@ subprocess. The division of responsibility:
 - **Scope analysis**: Python `symtable` module (stdlib) for
   global/nonlocal detection
 - **Inference**: [Astroid](https://github.com/pylint-dev/astroid) `>=3.0,<4`
-  (shipped) for caller-count inference in `analysis/inference.py`
+  (shipped) for caller-count inference in `analysis/inference.py` and
+  strategy-3 transitive-call pairing in `quality/pairing.py`
 - **Complexity**: lifted gaze-py McCabe implementation; no radon dependency
 - **Coverage**: [coverage.py](https://github.com/nedbat/coveragepy) `>=7.0,<8`
   (shipped runtime dependency) for parsing `.coverage` data files
@@ -99,16 +100,22 @@ snake-eyes/
 │   │   ├── detector.py      # Python side-effect detector (analyze method)
 │   │   ├── complexity.py    # McCabe cyclomatic complexity (complexity method)
 │   │   └── inference.py     # astroid caller-count inference (classify_signals)
-│   └── signals/
-│       ├── __init__.py
-│       ├── _routing.py      # effect-type → category routing (reconstructed from gaze-py)
-│       ├── _types.py        # SignalResult value type
-│       ├── interface.py     # interface source extractor (reconstructed from gaze-py)
-│       ├── visibility.py    # visibility source extractor (reconstructed from gaze-py)
-│       ├── caller.py        # caller_count source extractor (reconstructed from gaze-py)
-│       ├── naming.py        # naming_convention source extractor (reconstructed from gaze-py)
-│       ├── docstring.py     # docstring source extractor (reconstructed from gaze-py)
-│       └── adapter.py       # extract_signals fan-out (classify_signals method)
+│   ├── signals/
+│   │   ├── __init__.py
+│   │   ├── _routing.py      # effect-type → category routing (reconstructed from gaze-py)
+│   │   ├── _types.py        # SignalResult value type
+│   │   ├── interface.py     # interface source extractor (reconstructed from gaze-py)
+│   │   ├── visibility.py    # visibility source extractor (reconstructed from gaze-py)
+│   │   ├── caller.py        # caller_count source extractor (reconstructed from gaze-py)
+│   │   ├── naming.py        # naming_convention source extractor (reconstructed from gaze-py)
+│   │   ├── docstring.py     # docstring source extractor (reconstructed from gaze-py)
+│   │   └── adapter.py       # extract_signals fan-out (classify_signals method)
+│   └── quality/
+│       ├── __init__.py      # re-exports run_test_mapping
+│       ├── pairing.py       # test-function pairing (3 strategies, lifted from gaze-py)
+│       ├── assertions.py    # assertion detection & classification (lifted from gaze-py)
+│       ├── mapping.py       # side-effect-type inference (test_mapping method)
+│       └── pipeline.py      # run_test_mapping orchestration (test_mapping method)
 ├── tests/
 ├── .github/workflows/       # CI: ruff, mypy, pytest gates
 ├── pyproject.toml
@@ -119,6 +126,7 @@ snake-eyes/
 ```
 Delivered in issue #4: `detector.py`, `complexity.py`, `coverage.py`, `_shared.py`, and the `analyze`, `complexity`, and `coverage` JSON-RPC methods.
 Delivered in issue #5: the `signals/` extractors, `analysis/inference.py` (astroid caller-count inference), and the `classify_signals` JSON-RPC method.
+Delivered in issue #6: the `quality/` package (`pairing.py`, `assertions.py`, `mapping.py`, `pipeline.py`), and the `test_mapping` JSON-RPC method.
 
 ## Shell Commands
 

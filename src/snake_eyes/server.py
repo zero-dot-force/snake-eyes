@@ -27,6 +27,7 @@ from .protocol import (
     shutdown_result,
     to_json,
 )
+from .quality import run_test_mapping
 from .signals.adapter import extract_signals
 
 SHUTDOWN_METHOD = "shutdown"
@@ -132,6 +133,15 @@ def _classify_signals(params: dict[str, Any] | None) -> dict[str, Any]:
     return {"signals": signals}
 
 
+def _test_mapping(params: dict[str, Any] | None) -> dict[str, Any]:
+    root_path, patterns = _validate_analysis_params(params)
+    try:
+        mappings = run_test_mapping(root_path, patterns)
+    except FileNotFoundError as err:
+        raise RpcError(INVALID_PARAMS, str(err)) from err
+    return {"mappings": mappings}
+
+
 DEFAULT_DISPATCH: Mapping[str, Handler] = {
     "initialize": _initialize,
     SHUTDOWN_METHOD: _shutdown,
@@ -140,6 +150,7 @@ DEFAULT_DISPATCH: Mapping[str, Handler] = {
     "complexity": _complexity,
     "coverage": _coverage,
     "classify_signals": _classify_signals,
+    "test_mapping": _test_mapping,
 }
 
 
