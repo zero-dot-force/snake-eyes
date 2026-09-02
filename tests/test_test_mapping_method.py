@@ -93,8 +93,9 @@ class TestPairing:
 
     def test_exact_name_match_confidence_90(self, tmp_path: Path) -> None:
         rec = self._target_rec(tmp_path, "add")
-        (tmp_path / "test_m.py").write_text("def test_add():\n    assert True\n")
-        tree = ast.parse("def test_add():\n    assert True\n")
+        src = "def test_add():\n    add()\n    assert True\n"
+        (tmp_path / "test_m.py").write_text(src)
+        tree = ast.parse(src)
         pairs = pair_tests(
             [("test_add", "test_m.py")],
             [rec],
@@ -108,8 +109,9 @@ class TestPairing:
 
     def test_case_only_match_confidence_70(self, tmp_path: Path) -> None:
         rec = self._target_rec(tmp_path, "add")
-        (tmp_path / "test_m.py").write_text("def test_Add():\n    assert True\n")
-        tree = ast.parse("def test_Add():\n    assert True\n")
+        src = "def test_Add():\n    add()\n    assert True\n"
+        (tmp_path / "test_m.py").write_text(src)
+        tree = ast.parse(src)
         pairs = pair_tests(
             [("test_Add", "test_m.py")],
             [rec],
@@ -180,7 +182,7 @@ class TestPairing:
             name="add", package=derive_package("m.py"), file="m.py", line=1
         )
         (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
-        tree = ast.parse("def test_add():\n    assert True\n")
+        tree = ast.parse("def test_add():\n    add()\n    assert True\n")
         pairs = pair_tests(
             [("test_add", "test_m.py")],
             [rec],
@@ -196,7 +198,7 @@ class TestPairing:
             name="add", package=derive_package("m.py"), file="m.py", line=1
         )
         (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
-        tree = ast.parse("def test_add():\n    assert True\n")
+        tree = ast.parse("def test_add():\n    add()\n    assert True\n")
         pairs = pair_tests(
             [("test_add", "test_m.py")],
             [rec],
@@ -218,7 +220,7 @@ class TestPairing:
         rec_exact = FunctionRecord(
             name="add", package=derive_package("m.py"), file="m.py", line=1
         )
-        tree_exact = ast.parse("def test_add():\n    assert True\n")
+        tree_exact = ast.parse("def test_add():\n    add()\n    assert True\n")
         pairs_90 = pair_tests(
             [("test_add", "test_m.py")],
             [rec_exact],
@@ -227,7 +229,7 @@ class TestPairing:
             ["m.py"],
         )
         # Strategy 1 case-only (70)
-        tree_70 = ast.parse("def test_Add():\n    assert True\n")
+        tree_70 = ast.parse("def test_Add():\n    add()\n    assert True\n")
         pairs_70 = pair_tests(
             [("test_Add", "test_m.py")],
             [rec_exact],
@@ -257,6 +259,172 @@ class TestPairing:
         assert 90 in confidences, f"Expected 90 in confidences, got {confidences}"
         assert 70 in confidences, f"Expected 70 in confidences, got {confidences}"
         assert 80 in confidences, f"Expected 80 in confidences, got {confidences}"
+
+    # -- Call-site verification tests (issue #14) ----------------------------
+
+    def test_callsite_verified_emits_pairing(self, tmp_path: Path) -> None:
+        """Strategy-1: name match WITH direct call emits pairing at confidence 90."""
+        rec = self._target_rec(tmp_path, "add")
+        test_src = "def test_add():\n    result = add(1, 2)\n    assert result == 3\n"
+        (tmp_path / "test_m.py").write_text(test_src)
+        tree = ast.parse(test_src)
+        pairs = pair_tests(
+            [("test_add", "test_m.py")],
+            [rec],
+            {"test_m.py": tree},
+            str(tmp_path),
+            ["m.py"],
+        )
+        assert len(pairs) == 1
+        assert pairs[0].confidence == 90
+
+    def test_callsite_attribute_call_emits_pairing(self, tmp_path: Path) -> None:
+        """Strategy-1: attribute call obj.add() counts as call-site presence."""
+        rec = self._target_rec(tmp_path, "add")
+        test_src = "def test_add():\n    obj.add(1, 2)\n    assert True\n"
+        (tmp_path / "test_m.py").write_text(test_src)
+        tree = ast.parse(test_src)
+        pairs = pair_tests(
+            [("test_add", "test_m.py")],
+            [rec],
+            {"test_m.py": tree},
+            str(tmp_path),
+            ["m.py"],
+        )
+        assert len(pairs) == 1
+        assert pairs[0].confidence == 90
+
+    def test_callsite_no_call_suppresses_pairing(self, tmp_path: Path) -> None:
+        """Strategy-1: name match WITHOUT call to target suppresses the pairing."""
+        rec = self._target_rec(tmp_path, "add")
+        test_src = "def test_add():\n    assert True\n"
+        (tmp_path / "test_m.py").write_text(test_src)
+        tree = ast.parse(test_src)
+        pairs = pair_tests(
+            [("test_add", "test_m.py")],
+            [rec],
+            {"test_m.py": tree},
+            str(tmp_path),
+            ["m.py"],
+        )
+        assert len(pairs) == 0
+
+    def test_callsite_suppressed_falls_through_to_strategy2(
+        self, tmp_path: Path
+    ) -> None:
+        """Suppressed strategy-1 match falls through to strategy-2 direct-call match."""
+        # test_add name-matches "add" but never calls add(); instead calls "compute"
+        (tmp_path / "m.py").write_text(
+            "def add(a, b):\n    return a + b\n\n\ndef compute(x):\n    return x * 2\n"
+        )
+        rec_add = FunctionRecord(
+            name="add", package=derive_package("m.py"), file="m.py", line=1
+        )
+        rec_compute = FunctionRecord(
+            name="compute", package=derive_package("m.py"), file="m.py", line=5
+        )
+        test_src = "def test_add():\n    result = compute(5)\n    assert result == 10\n"
+        (tmp_path / "test_m.py").write_text(test_src)
+        tree = ast.parse(test_src)
+        pairs = pair_tests(
+            [("test_add", "test_m.py")],
+            [rec_add, rec_compute],
+            {"test_m.py": tree},
+            str(tmp_path),
+            ["m.py"],
+        )
+        # Strategy-1 name match (test_add -> add) suppressed (no call to add)
+        # Strategy-2 direct call picks up compute at confidence 80
+        assert len(pairs) == 1
+        assert pairs[0].target_function == "compute"
+        assert pairs[0].confidence == 80
+
+    def test_callsite_indirect_call_not_counted(self, tmp_path: Path) -> None:
+        """Indirect call through helper does NOT count for strategy-1 verification."""
+        rec = self._target_rec(tmp_path, "add")
+        # test_add calls helper() which calls add() — but strategy-1
+        # only checks direct calls
+        test_src = (
+            "def helper():\n    return add(1, 2)\n\n\n"
+            "def test_add():\n    result = helper()\n    assert result == 3\n"
+        )
+        (tmp_path / "test_m.py").write_text(test_src)
+        tree = ast.parse(test_src)
+        pairs = pair_tests(
+            [("test_add", "test_m.py")],
+            [rec],
+            {"test_m.py": tree},
+            str(tmp_path),
+            ["m.py"],
+        )
+        # Strategy-1 suppressed (no direct call to add in test_add body)
+        # Strategy-2 also fails (test_add calls helper, not add)
+        # Might be caught by strategy-3 but that depends on astroid graph
+        assert not any(p.target_function == "add" and p.confidence == 90 for p in pairs)
+
+    def test_callsite_case_only_with_call_emits_70(self, tmp_path: Path) -> None:
+        """Case-only name match with call present emits pairing at confidence 70."""
+        rec = self._target_rec(tmp_path, "add")
+        test_src = "def test_Add():\n    add()\n    assert True\n"
+        (tmp_path / "test_m.py").write_text(test_src)
+        tree = ast.parse(test_src)
+        pairs = pair_tests(
+            [("test_Add", "test_m.py")],
+            [rec],
+            {"test_m.py": tree},
+            str(tmp_path),
+            ["m.py"],
+        )
+        assert len(pairs) == 1
+        assert pairs[0].confidence == 70
+
+    def test_callsite_case_only_no_call_suppresses(self, tmp_path: Path) -> None:
+        """Case-only name match with no call to target suppresses the pairing."""
+        rec = self._target_rec(tmp_path, "add")
+        test_src = "def test_Add():\n    assert True\n"
+        (tmp_path / "test_m.py").write_text(test_src)
+        tree = ast.parse(test_src)
+        pairs = pair_tests(
+            [("test_Add", "test_m.py")],
+            [rec],
+            {"test_m.py": tree},
+            str(tmp_path),
+            ["m.py"],
+        )
+        assert len(pairs) == 0
+
+
+# ---------------------------------------------------------------------------
+# Call-site integration (issue #14)
+# ---------------------------------------------------------------------------
+
+
+class TestCallsiteIntegration:
+    """Integration: false strategy-1 pairings absent from run_test_mapping output."""
+
+    def test_callsite_integration_run_test_mapping(self, tmp_path: Path) -> None:
+        """Integration: false strategy-1 pairing absent from run_test_mapping output."""
+        # Source file with target function "add"
+        (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        # test_add name-matches "add" but NEVER calls add() — strategy-1 should suppress
+        # The test doesn't call any other target either, so no strategy-2 match
+        (tests / "test_m.py").write_text(
+            "def test_add():\n    x = 1 + 2\n    assert x == 3\n"
+        )
+        rows = run_test_mapping(str(tmp_path), None)
+        # The false pairing (test_add -> add at confidence 90) must be absent
+        false_pairings = [
+            r
+            for r in rows
+            if r["test_function"] == "test_add"
+            and r["target_function"] == "add"
+            and r["confidence"] == 90
+        ]
+        assert false_pairings == [], (
+            f"Strategy-1 false pairing should be suppressed, got: {false_pairings}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +1013,8 @@ class TestPipeline:
         (pkg_b / "math.py").write_text("def add(a, b):\n    return a + b\n")
         tests = tmp_path / "tests"
         tests.mkdir()
-        (tests / "test_math.py").write_text("def test_add():\n    assert True\n")
+        test_src = "def test_add():\n    add()\n    assert True\n"
+        (tests / "test_math.py").write_text(test_src)
         rows = run_test_mapping(str(tmp_path), None)
         add_rows = [r for r in rows if r["target_function"] == "add"]
         # Should have rows for both packages
@@ -1094,14 +1263,16 @@ class TestAstroidCacheIsolation:
         (p1 / "m.py").write_text("def add(a, b):\n    return a + b\n")
         t1 = p1 / "tests"
         t1.mkdir()
-        (t1 / "test_m.py").write_text("def test_add():\n    assert True\n")
+        t1_src = "def test_add():\n    add()\n    assert True\n"
+        (t1 / "test_m.py").write_text(t1_src)
         # Project 2
         p2 = tmp_path / "p2"
         p2.mkdir()
         (p2 / "n.py").write_text("def multiply(a, b):\n    return a * b\n")
         t2 = p2 / "tests"
         t2.mkdir()
-        (t2 / "test_n.py").write_text("def test_multiply():\n    assert True\n")
+        t2_src = "def test_multiply():\n    multiply()\n    assert True\n"
+        (t2 / "test_n.py").write_text(t2_src)
         rows1 = run_test_mapping(str(p1), None)
         rows2 = run_test_mapping(str(p2), None)
         # Results should be independent
@@ -1200,7 +1371,7 @@ class TestPairingCoverage:
             name="foo", package=derive_package("m.py"), file="m.py", line=1
         )
         # testFoo → strips 'test' → 'Foo', matches 'foo' case-insensitive
-        tree = ast.parse("def testFoo():\n    assert True\n")
+        tree = ast.parse("def testFoo():\n    foo()\n    assert True\n")
         pairs = pair_tests(
             [("testFoo", "test_m.py")],
             [rec],
@@ -1454,7 +1625,8 @@ class TestStrategy3ActualGraph:
         )
         # Two test functions that would both map to the same pair
         test_src = (
-            "def test_add():\n    assert True\ndef test_add2():\n    assert True\n"
+            "def test_add():\n    add()\n    assert True\n"
+            "def test_add2():\n    assert True\n"
         )
         tree = ast.parse(test_src)
         pairs = pair_tests(
@@ -1538,7 +1710,8 @@ class TestPipelineCoverage2:
         (tmp_path / "prod.py").write_text("def add(a, b):\n    return a + b\n")
         tests = tmp_path / "tests"
         tests.mkdir()
-        (tests / "test_m.py").write_text("def test_add():\n    assert True\n")
+        test_src = "def test_add():\n    add()\n    assert True\n"
+        (tests / "test_m.py").write_text(test_src)
         with mock.patch(
             "snake_eyes.quality.pipeline.collect_assertions",
             side_effect=RecursionError("depth exceeded"),
@@ -1551,7 +1724,8 @@ class TestPipelineCoverage2:
         (tmp_path / "prod.py").write_text("def add(a, b):\n    return a + b\n")
         tests = tmp_path / "tests"
         tests.mkdir()
-        (tests / "test_m.py").write_text("def test_add():\n    assert True\n")
+        test_src = "def test_add():\n    add()\n    assert True\n"
+        (tests / "test_m.py").write_text(test_src)
         with mock.patch(
             "snake_eyes.quality.pipeline.collect_assertions",
             side_effect=OSError("IO error"),
@@ -1564,7 +1738,8 @@ class TestPipelineCoverage2:
         (tmp_path / "prod.py").write_text("def add(a, b):\n    return a + b\n")
         tests = tmp_path / "tests"
         tests.mkdir()
-        (tests / "test_m.py").write_text("def test_add():\n    assert True\n")
+        test_src = "def test_add():\n    add()\n    assert True\n"
+        (tests / "test_m.py").write_text(test_src)
         # Patch pair_tests to return a pair whose test_file has no tree
         from snake_eyes.quality.pairing import PairedResult
 
@@ -1616,7 +1791,8 @@ class TestPairingCoverage2:
         (tmp_path / "prod.py").write_text("def add(a, b):\n    return a + b\n")
         tests = tmp_path / "tests"
         tests.mkdir()
-        (tests / "test_m.py").write_text("def test_add():\n    assert True\n")
+        test_src = "def test_add():\n    add()\n    assert True\n"
+        (tests / "test_m.py").write_text(test_src)
 
         clear_calls = []
         original = _astroid.MANAGER.clear_cache

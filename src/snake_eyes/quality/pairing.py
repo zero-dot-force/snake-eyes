@@ -88,18 +88,37 @@ def _strip_test_prefix(name: str) -> str | None:
 def _name_match(
     test_name: str,
     target_records: list[FunctionRecord],
+    test_tree: ast.Module | None = None,
 ) -> list[tuple[FunctionRecord, int]]:
-    """Return list of (record, confidence) for name-convention strategy."""
+    """Return list of (record, confidence) for name-convention strategy.
+
+    When *test_tree* is provided, each name-convention match is verified
+    against the call sites in the test body: the match is emitted only if
+    the target function name appears as a direct call inside the test
+    function.  This eliminates false pairings where a test is named after
+    a function it never actually invokes.
+    """
     # Extract the bare name (without class qualifier) for matching
     bare = test_name.split(".")[-1]
     stripped = _strip_test_prefix(bare)
     if stripped is None:
         return []
+
+    # Compute callee set ONCE (not per-match) for call-site verification.
+    if test_tree is not None:
+        called = _direct_call_names(test_tree, test_name)
+    else:
+        called = None
+
     results: list[tuple[FunctionRecord, int]] = []
     for rec in target_records:
         if rec.name == stripped:
+            if called is not None and rec.name not in called:
+                continue
             results.append((rec, 90))
         elif rec.name.lower() == stripped.lower():
+            if called is not None and rec.name not in called:
+                continue
             results.append((rec, 70))
     return results
 
@@ -390,8 +409,8 @@ def pair_tests(
 
             paired: list[tuple[FunctionRecord, int]] = []
 
-            # Strategy 1: name convention
-            paired = _name_match(test_name, target_records)
+            # Strategy 1: name convention (with call-site verification)
+            paired = _name_match(test_name, target_records, tree)
 
             # Strategy 2: direct call (only if strategy 1 found nothing)
             if not paired:
