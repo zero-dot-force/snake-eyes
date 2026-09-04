@@ -1,43 +1,38 @@
 ## Why
 
 The `_handle_call` fallthrough in `analysis/detector.py` emits
-`CallbackInvocation` with `confidence: ambiguous` for any `ast.Name`
-call that isn't in `_PURE_BUILTINS` or `local_func_names`. This
-catches imported class constructors like `SignalResult(...)`,
-`Path(...)`, and `DiscoveryResult(...)` — none of which are callbacks.
+`CallbackInvocation` with `confidence: ambiguous` for class constructor
+calls defined in the same module, even though their names are available
+from the AST.
 
-The result: **729+ false `CallbackInvocation` gaps** across 326 test
-pairings. These inflate the contract effect surface, making Gaze
-reports noisy and reducing trust in side-effect detection.
+Issue #18 reports a broader baseline of **729+ `CallbackInvocation` gaps**
+across 326 test pairings. The safe same-file constructors addressed here
+contribute to that noisy contract effect surface.
 
-Class constructor calls are **not genuinely ambiguous** — they are
-deterministic object instantiations. The detector already tracks
-`import_aliases` (passed to `_EffectVisitor`) but never consults them
-during the `_handle_call` fallthrough. The fix is to use information
-the detector already has.
+Only provably safe class constructor calls are not genuinely ambiguous.
+The fix uses same-module AST declarations while leaving imports and other
+unresolved names ambiguous.
 
 Ref: [GitHub Issue #18](https://github.com/zero-dot-force/snake-eyes/issues/18)
 
 ## What Changes
 
-Expand the set of names recognized as "known safe" in `_handle_call`
-so that class constructors and imported callables are not
-misclassified as `CallbackInvocation`:
+Recognize class constructors declared in the same lexical module or
+function scope without treating imports or a naming convention as proof
+that an arbitrary callable is effect-free:
 
-1. **Consult `import_aliases`** — names present in the module's
-   import table are known symbols, not opaque callbacks. When a
-   called name resolves to an import, skip the `CallbackInvocation`
-   fallthrough.
+1. **Detect trivial same-module `ClassDef` names** — classes with no
+   decorators, keywords, or executable body and either no bases or exactly
+   the built-in `Exception`/`BaseException` base are known-safe constructors.
+   Add them to the known-name set alongside
+   `local_func_names`.
 
-2. **Detect same-module `ClassDef` names** — classes defined in the
-   same file are known constructors. Add them to the known-name set
-   alongside `local_func_names`.
+2. **Respect lexical shadowing** — parameters, imports, assignments,
+   control-flow binders, duplicate definitions, and enclosing-function
+   bindings take precedence over a same-named class and remain ambiguous.
 
-3. **PascalCase naming convention heuristic** — as a secondary
-   signal, names matching PascalCase (`^[A-Z][a-zA-Z0-9]*$`) are
-   overwhelmingly class constructors in Python. Use this as an
-   additional constructor hint when the name is not otherwise
-   resolved.
+Imported names and PascalCase names remain ambiguous until a future
+effect-specific resolver can identify their observable behavior.
 
 ## Capabilities
 
@@ -47,17 +42,12 @@ None.
 
 ### Modified Capabilities
 
-- **M1: Import-aware call resolution** — `_handle_call` consults
-  `import_aliases` before falling through to `CallbackInvocation`,
-  suppressing false positives for imported names.
-
-- **M2: ClassDef-aware call resolution** — `_handle_call` recognizes
+- **M1: ClassDef-aware call resolution** — `_handle_call` recognizes
   class names defined in the same module, suppressing false positives
   for same-file constructors.
 
-- **M3: PascalCase constructor heuristic** — `_handle_call` uses
-  naming convention as a secondary signal to identify likely
-  constructors when no other resolution applies.
+- **M2: Scope-aware class resolution** — parameter bindings take
+  precedence over module-level class names and remain ambiguous.
 
 ### Removed Capabilities
 
@@ -69,21 +59,20 @@ None.
 |-----------|---------|-------|
 | I. Protocol Fidelity | PASS | No JSON-RPC schema changes. Only accuracy of emitted effects changes. Determinism preserved. |
 | II. Detection Accuracy | PASS | Eliminates false positives (bugs per constitution). Preserves ambiguous fallthrough for genuinely unknown names. |
-| III. Python-Native Analysis | PASS | Uses `ast` module (`ClassDef`, `Name`) and existing `import_aliases`. No new dependencies. |
-| IV. Testability | PASS | 7 test scenarios covering all resolution layers plus regression guards. Coverage gate maintained. |
-| V. Analysis Safety | PASS | No code execution. Static name resolution only (set/dict lookups, regex match). |
+| III. Python-Native Analysis | PASS | Uses Python's `ast` module to collect definitions and binding constructs within their lexical scopes. No new dependencies. |
+| IV. Testability | PASS | Regression scenarios cover safe and ambiguous resolution boundaries. Coverage gate maintained. |
+| V. Analysis Safety | PASS | No code execution. Static name resolution uses linear AST traversal and set/dict lookups. |
 
 ## Impact
 
-- **False positive reduction**: Eliminates the majority of 729+
-  spurious `CallbackInvocation` gaps.
-- **No false negative risk**: Genuine callbacks (lowercase names not
-  in imports or class defs) still trigger `CallbackInvocation` as
-  before.
-- **Existing tests**: Existing golden tests that assert
-  `CallbackInvocation` for PascalCase class names (e.g., `MyError`)
-  will need updating — the behavioral change is intentional. New
-  tests required for the three resolution strategies.
+- **False positive reduction**: Eliminates false `CallbackInvocation`
+  gaps for same-module and nested class constructors.
+- **Preserved ambiguity**: Imported, convention-named, shadowed, and
+  non-trivial class calls continue to trigger `CallbackInvocation` when
+  their effects cannot be proven statically.
+- **Existing tests**: Golden expectations for pass-only built-in exception
+  subclasses (such as `MyError(Exception)`) become callback-free. New tests
+  cover the resolution and ambiguity boundaries.
 - **Protocol compliance**: No changes to JSON-RPC protocol or
   response schemas. Only the accuracy of emitted effects improves.
 - **Downstream**: Gaze reports become cleaner — fewer ambiguous

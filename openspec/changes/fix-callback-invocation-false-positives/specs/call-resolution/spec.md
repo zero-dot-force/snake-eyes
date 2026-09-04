@@ -1,16 +1,16 @@
 ## Relationship to Prior Spec
 
 This spec refines the "ambiguous constructs reported, never dropped"
-requirement from the detector spec (`openspec/changes/analysis-methods/
-specs/detector/spec.md`). That requirement states that calls to names
+requirement from the detector spec
+([detector spec](../../../analysis-methods/specs/detector/spec.md)).
+That requirement states that calls to names
 not on the allowlist SHALL fall through to `CallbackInvocation` with
 `confidence: ambiguous`. This spec expands the set of statically-
-resolvable names by adding import-alias resolution, ClassDef name
-collection, and a PascalCase naming convention heuristic. The prior
+resolvable names by adding ClassDef name collection. The prior
 requirement's intent — that genuinely ambiguous calls are never
-silently dropped — is preserved. Names resolvable through imports,
-ClassDef, or PascalCase convention are not genuinely ambiguous and
-therefore do not fall under the "never dropped" mandate.
+silently dropped — is preserved. Only safe, unshadowed local ClassDef
+names are resolved; imported and convention-named calls remain ambiguous
+unless a separate effect-specific rule resolves them.
 
 ## Coverage Strategy
 
@@ -23,51 +23,76 @@ detector. The existing 85% coverage gate applies.
 
 ## ADDED Requirements
 
-### Requirement: Import-aware call resolution
-The `_handle_call` method SHALL check `self.import_aliases` before
-emitting `CallbackInvocation` for an `ast.Name` call. When the called
-name is present as a key in `import_aliases`, the call SHALL NOT be
-reported as `CallbackInvocation`.
-
-#### Scenario: Imported class constructor
-- **WHEN** a function calls `SignalResult(...)` and `SignalResult` is
-  in `import_aliases` (from `from .models import SignalResult`)
-- **THEN** no `CallbackInvocation` effect is emitted for that call
-
-#### Scenario: Imported function call
-- **WHEN** a function calls `namedtuple(...)` and `namedtuple` is
-  in `import_aliases` (from `from collections import namedtuple`)
-- **THEN** no `CallbackInvocation` effect is emitted for that call
-
-#### Scenario: Aliased import
-- **WHEN** a function calls `np(...)` and `np` is in `import_aliases`
-  (from `import numpy as np`)
-- **THEN** no `CallbackInvocation` effect is emitted for that call
-
-#### Scenario: Unknown name not in imports
-- **WHEN** a function calls `callback(...)` and `callback` is NOT in
-  `import_aliases`, NOT in `local_func_names`, and NOT in
-  `_PURE_BUILTINS`
-- **THEN** `CallbackInvocation` with `confidence: ambiguous` SHALL
-  still be emitted
-
 ### Requirement: ClassDef-aware call resolution
-The detector SHALL collect `ast.ClassDef` names from the module body
-and include them in the set of known callable names. When the called
-name matches a class defined in the same module, the call SHALL NOT
-be reported as `CallbackInvocation`.
+The detector SHALL collect trivial `ast.ClassDef` names from the module
+body and include them in the set of known callable names. A class is
+trivial only when it has no keywords, decorators, or executable body and
+has either no bases or exactly the built-in `Exception` or `BaseException`
+base. When the called name matches such an unshadowed class defined in
+the same module, the call SHALL NOT be reported as `CallbackInvocation`.
 
 #### Scenario: Same-module class constructor
-- **WHEN** a function calls `MyHelper(...)` and `class MyHelper` is
-  defined at module level in the same file
+- **GIVEN** a trivial, unshadowed class defined directly in the module body
+- **WHEN** a function calls `MyHelper(...)` and `class MyHelper: pass`
+  is defined at module level in the same file
 - **THEN** no `CallbackInvocation` effect is emitted for that call
 
 #### Scenario: Nested class constructor
-- **WHEN** a function defines `class Inner: ...` as a nested class
+- **GIVEN** a trivial, unshadowed class defined directly in a function body
+- **WHEN** a function defines `class Inner: pass` as a nested class
   and then calls `Inner(...)`
 - **THEN** no `CallbackInvocation` effect is emitted for that call
 
+#### Scenario: Parameter shadows module class
+- **GIVEN** a trivial module class and a same-named function parameter
+- **WHEN** a function parameter has the same name as a module-level
+  class and is called
+- **THEN** `CallbackInvocation` with `confidence: ambiguous` SHALL be
+  emitted because the parameter is the runtime binding
+
+#### Scenario: Rebound class name
+- **GIVEN** a class name that would otherwise qualify for safe resolution
+- **WHEN** a safe local class name is reassigned, imported, or captured by
+  a pattern, loop, context manager, or exception handler in its lexical
+  scope, or shadowed by an enclosing function binding
+- **THEN** `CallbackInvocation` with `confidence: ambiguous` SHALL be
+  emitted because the class binding is no longer proven
+
+Binding analysis SHALL be conservative and scope-wide. A competing binding
+anywhere in the lexical scope preserves ambiguity regardless of source order.
+Wildcard imports, conditional class definitions, explicit global writes, and
+mutation of a class's `__init__` or `__new__` attributes also preserve
+ambiguity. Constructor mutation includes direct assignment or deletion and
+statically identifiable `setattr`/`delattr` calls. Global declarations apply
+throughout their function even when nested under control flow.
+
+Direct-name aliases SHALL retain the constructor identity resolved when each
+assignment executes. Constructor mutation through direct, transitive, or
+class-body aliases SHALL preserve ambiguity. Later alias rebinding or deletion
+SHALL affect only that alias and SHALL NOT retroactively change prior aliases.
+
+#### Scenario: Constructor mutation through an alias chain
+- **GIVEN** a safe class with one or more direct-name aliases
+- **WHEN** `__init__` or `__new__` is mutated through an alias, including an
+  alias retained in a class namespace
+- **THEN** a call to the original class SHALL emit `CallbackInvocation` with
+  `confidence: ambiguous`
+
+#### Scenario: Shadowed exception base
+- **GIVEN** a pass-only class with a syntactically supported exception base
+- **WHEN** a pass-only class inherits from `Exception` or `BaseException`
+  whose binding is not proven to be the built-in exception class
+- **THEN** a call to that class SHALL emit `CallbackInvocation` with
+  `confidence: ambiguous`
+
+#### Scenario: Effectful class constructor
+- **GIVEN** a same-module class that is not structurally trivial
+- **WHEN** a function calls a same-module class with an `__init__`
+  method or another executable class construct
+- **THEN** `CallbackInvocation` with `confidence: ambiguous` SHALL be emitted
+
 #### Scenario: Unknown non-PascalCase name from unresolved source
+- **GIVEN** an unresolved callable name with no effect-specific rule
 - **WHEN** a function calls `external_helper(...)` and
   `external_helper` is NOT defined in the same module, NOT in
   `import_aliases`, NOT in `_PURE_BUILTINS`, and does NOT match
@@ -75,51 +100,31 @@ be reported as `CallbackInvocation`.
 - **THEN** `CallbackInvocation` with `confidence: ambiguous` SHALL
   still be emitted
 
-### Requirement: PascalCase constructor heuristic
-The `_handle_call` method SHALL apply a PascalCase naming convention
-check as a final resolution step before emitting `CallbackInvocation`.
-Names matching the pattern `^[A-Z][a-zA-Z0-9]*$` SHALL be treated as
-likely constructors and SHALL NOT trigger `CallbackInvocation`.
+### Requirement: Ambiguous imported and convention-named calls
+The detector SHALL emit `CallbackInvocation` with
+`confidence: ambiguous` for imported and convention-named `ast.Name`
+calls unless a separate effect-specific rule resolves their observable
+behavior.
 
-#### Scenario: PascalCase name not in imports or class defs
-- **WHEN** a function calls `SomeClass(...)` and `SomeClass` is NOT
-  in `import_aliases`, NOT in `local_func_names`, NOT in
-  `_PURE_BUILTINS`, but matches PascalCase pattern
-- **THEN** no `CallbackInvocation` effect is emitted for that call
+#### Scenario: Imported callable
+- **GIVEN** an imported callable with no effect-specific rule
+- **WHEN** a function calls an imported name such as `Path(...)`
+- **THEN** `CallbackInvocation` with `confidence: ambiguous` SHALL be emitted
 
-#### Scenario: Lowercase name not resolved
-- **WHEN** a function calls `unknown_func(...)` and the name does
-  NOT match PascalCase, is NOT in any known-name set
-- **THEN** `CallbackInvocation` with `confidence: ambiguous` SHALL
-  be emitted
-
-#### Scenario: ALL_CAPS name not matching PascalCase
-- **WHEN** a function calls `SOME_CONSTANT(...)` and the name does
-  NOT match `^[A-Z][a-zA-Z0-9]*$` (contains underscore)
-- **THEN** `CallbackInvocation` with `confidence: ambiguous` SHALL
-  be emitted (ALL_CAPS names are typically constants, not constructors)
+#### Scenario: PascalCase name not defined locally
+- **GIVEN** a PascalCase callable name with no local definition
+- **WHEN** a function calls `SomeClass(...)` that is not a local class
+- **THEN** `CallbackInvocation` with `confidence: ambiguous` SHALL be emitted
 
 ### Requirement: Resolution order
-The `_handle_call` method SHALL apply resolution checks in the
-following order for `ast.Name` calls:
+After effect-specific call rules have not matched, `_handle_call` SHALL
+apply the following unresolved-name fallback checks in order:
 
 1. `_PURE_BUILTINS` set membership (existing, unchanged)
-2. `local_func_names` set membership (expanded to include ClassDef)
-3. `import_aliases` dict membership (new)
-4. PascalCase pattern match (new)
-5. Fallthrough: emit `CallbackInvocation` ambiguous
+2. `local_func_names` set membership for directly resolved definitions
+3. `module_func_names` membership, guarded by local, nonlocal, enclosing, and
+   explicit-global binding semantics
+4. Fallthrough: emit `CallbackInvocation` ambiguous
 
 Each check SHALL short-circuit — if a name is resolved at any step,
 subsequent checks SHALL NOT execute.
-
-#### Scenario: Name in both PURE_BUILTINS and import_aliases
-- **WHEN** a function calls `int(...)` which is in both
-  `_PURE_BUILTINS` and `import_aliases`
-- **THEN** resolution occurs at step 1 (`_PURE_BUILTINS`) and no
-  `CallbackInvocation` is emitted
-
-#### Scenario: Name in import_aliases but not local_func_names
-- **WHEN** a function calls `Path(...)` which is in `import_aliases`
-  but not in `local_func_names`
-- **THEN** resolution occurs at step 3 (`import_aliases`) and no
-  `CallbackInvocation` is emitted
