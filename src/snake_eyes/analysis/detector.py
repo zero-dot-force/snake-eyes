@@ -16,8 +16,8 @@ Public API:
 from __future__ import annotations
 
 import ast
-import re
 import sys
+from collections.abc import Sequence
 from typing import Any
 
 from ._shared import (
@@ -116,14 +116,6 @@ _PURE_BUILTINS: frozenset[str] = frozenset(
         "__builtins__",
     }
 )
-
-# ---------------------------------------------------------------------------
-# PascalCase heuristic regex — names matching this pattern are likely class
-# constructors, not opaque callbacks.  Used as a last-resort resolution layer
-# in _handle_call when neither _PURE_BUILTINS, local_func_names, nor
-# import_aliases match.  ALL_CAPS names (e.g., SOME_CONSTANT) do NOT match.
-# ---------------------------------------------------------------------------
-_PASCAL_CASE_RE: re.Pattern[str] = re.compile(r"^[A-Z][a-zA-Z0-9]*$")
 
 # Mutating method names for containers
 _CONTAINER_MUTATING_METHODS: frozenset[str] = frozenset(
@@ -416,6 +408,9 @@ class _EffectVisitor(ast.NodeVisitor):
         param_names: set[str],
         open_vars: dict[str, bool],
         local_func_names: set[str],
+        local_binding_names: set[str],
+        module_func_names: set[str],
+        enclosing_bindings: _BindingChain | None,
     ) -> None:
         self.filename = filename
         self.import_aliases = import_aliases
@@ -425,6 +420,9 @@ class _EffectVisitor(ast.NodeVisitor):
         self.param_names = param_names
         self.open_vars = open_vars
         self.local_func_names = local_func_names
+        self.local_binding_names = local_binding_names
+        self.module_func_names = module_func_names
+        self.enclosing_bindings = enclosing_bindings
         self.effects: list[Effect] = []
         self._depth = 0
         self._max_depth = MAX_AST_DEPTH
@@ -1239,22 +1237,27 @@ class _EffectVisitor(ast.NodeVisitor):
             )
             return
 
-        # Name call: four-layer resolution (most-specific-first).
-        #   1. _PURE_BUILTINS  (frozenset lookup)
-        #   2. local_func_names (set lookup — module-level + nested funcs/classes)
-        #   3. import_aliases   (dict key lookup — imported names)
-        #   4. PascalCase regex (likely class constructor heuristic)
-        # Only genuinely unresolvable names fall through to CallbackInvocation.
+        # Name-call fallback resolves pure builtins, direct local definitions,
+        # then guarded module definitions. Imports and naming conventions do not
+        # prove purity, so unresolved names remain ambiguous.
         if isinstance(fn, ast.Name):
             name = fn.id
             if name in _PURE_BUILTINS:
                 return  # pure builtin, no effect
             if name in self.local_func_names:
+                return  # directly resolved local definition
+            module_resolved = (
+                name in self.module_func_names
+                and name not in self.local_binding_names
+                and name not in self.nonlocal_names
+                and (
+                    name in self.global_names
+                    or self.enclosing_bindings is None
+                    or name not in self.enclosing_bindings
+                )
+            )
+            if module_resolved:
                 return  # statically-resolvable pure local call is NOT an effect
-            if name in self.import_aliases:
-                return  # imported name — not an opaque callback
-            if _PASCAL_CASE_RE.match(name):
-                return  # likely class constructor (PascalCase heuristic)
             # Unknown external call → CallbackInvocation ambiguous
             self._add(
                 SideEffectType.CallbackInvocation,
@@ -1399,25 +1402,6 @@ def _has_contextmanager_decorator(
 
 
 # ---------------------------------------------------------------------------
-# Global / nonlocal name collection
-# ---------------------------------------------------------------------------
-
-
-def _collect_declared_names(
-    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> tuple[set[str], set[str]]:
-    """Return (global_names, nonlocal_names) declared directly in this function."""
-    globals_: set[str] = set()
-    nonlocals_: set[str] = set()
-    for node in ast.iter_child_nodes(func_node):
-        if isinstance(node, ast.Global):
-            globals_.update(node.names)
-        elif isinstance(node, ast.Nonlocal):
-            nonlocals_.update(node.names)
-    return globals_, nonlocals_
-
-
-# ---------------------------------------------------------------------------
 # Param extraction
 # ---------------------------------------------------------------------------
 
@@ -1436,6 +1420,434 @@ def _collect_params(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[st
     return params
 
 
+def _collect_lambda_params(node: ast.Lambda) -> set[str]:
+    args = node.args
+    return {
+        argument.arg
+        for argument in (
+            *args.posonlyargs,
+            *args.args,
+            *args.kwonlyargs,
+            *((args.vararg,) if args.vararg else ()),
+            *((args.kwarg,) if args.kwarg else ()),
+        )
+    }
+
+
+class _ScopeBindingCollector(ast.NodeVisitor):
+    """Collect binders in one Python lexical scope without entering child scopes."""
+
+    _MAX_ALIAS_TARGETS = 64
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+        self.functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        self.classes: dict[str, ast.ClassDef] = {}
+        self.constructor_mutations: set[str] = set()
+        self.global_rebindings: set[str] = set()
+        self.deleted_names: set[str] = set()
+        self.aliases: dict[str, str] = {}
+        self.alias_targets: dict[str, set[str]] = {}
+        self.unknown_alias_mutation = False
+        self.global_names: set[str] = set()
+        self.nonlocal_names: set[str] = set()
+        self._conditional_depth = 0
+        self._depth = 0
+
+    def visit(self, node: ast.AST) -> Any:
+        self._depth += 1
+        if self._depth > MAX_AST_DEPTH:
+            self._depth -= 1
+            raise RecursionError("AST depth budget exceeded in scope binding collector")
+        try:
+            return super().visit(node)
+        finally:
+            self._depth -= 1
+
+    def _bind(self, name: str) -> None:
+        self.counts[name] = self.counts.get(name, 0) + 1
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            self._bind(node.id)
+        if isinstance(node.ctx, ast.Del):
+            self.deleted_names.add(node.id)
+            self.aliases.pop(node.id, None)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.generic_visit(node)
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                if self._conditional_depth == 0:
+                    self.aliases.pop(target.id, None)
+                    self.alias_targets.pop(target.id, None)
+        if isinstance(node.value, ast.Name):
+            sources = self._alias_sources(node.value.id)
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    if self._conditional_depth:
+                        targets = self.alias_targets.setdefault(target.id, {target.id})
+                        if len(targets) + len(sources) > self._MAX_ALIAS_TARGETS:
+                            self.unknown_alias_mutation = True
+                        else:
+                            targets.update(sources)
+                    else:
+                        source = _resolve_alias(node.value.id, self.aliases)
+                        self.aliases[target.id] = source
+                        self.alias_targets[target.id] = set(sources)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self.generic_visit(node)
+        if isinstance(node.target, ast.Name):
+            self.aliases.pop(node.target.id, None)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.generic_visit(node)
+        if isinstance(node.target, ast.Name) and node.value is not None:
+            self.aliases.pop(node.target.id, None)
+            if isinstance(node.value, ast.Name):
+                source = _resolve_alias(node.value.id, self.aliases)
+                self.aliases[node.target.id] = source
+                self.alias_targets[node.target.id] = set(
+                    self._alias_sources(node.value.id)
+                )
+
+    def _alias_sources(self, name: str) -> set[str]:
+        sources = self.alias_targets.get(name)
+        if sources is None:
+            return {_resolve_alias(name, self.aliases)}
+        return sources
+
+    def _visit_conditional(self, node: ast.AST) -> None:
+        self._conditional_depth += 1
+        try:
+            self.generic_visit(node)
+        finally:
+            self._conditional_depth -= 1
+
+    visit_If = _visit_conditional
+    visit_For = _visit_conditional
+    visit_AsyncFor = _visit_conditional
+    visit_While = _visit_conditional
+    visit_Try = _visit_conditional
+    visit_TryStar = _visit_conditional
+    visit_With = _visit_conditional
+    visit_AsyncWith = _visit_conditional
+    visit_Match = _visit_conditional
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._bind(node.name)
+        self.functions[node.name] = node
+        self._visit_function_header(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._bind(node.name)
+        self.functions[node.name] = node
+        self._visit_function_header(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._bind(node.name)
+        self.classes[node.name] = node
+        for expression in (*node.decorator_list, *node.bases):
+            self.visit(expression)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+        for type_param in getattr(node, "type_params", ()):
+            self.visit(type_param)
+        statement_results: list[tuple[ast.stmt, _ScopeBindingCollector]] = []
+        class_globals: set[str] = set()
+        for statement in node.body:
+            collector = _ScopeBindingCollector()
+            collector.visit(statement)
+            statement_results.append((statement, collector))
+            class_globals.update(collector.global_names)
+        class_names: set[str] = set()
+        class_aliases: dict[str, set[str]] = {}
+        for statement, collector in statement_results:
+            self.unknown_alias_mutation |= collector.unknown_alias_mutation
+            for name in collector.constructor_mutations:
+                if name in class_names and name not in class_aliases:
+                    continue
+                for source in class_aliases.get(name, {name}):
+                    self.constructor_mutations.update(self._alias_sources(source))
+            self.global_rebindings.update(class_globals & set(collector.counts))
+            if isinstance(statement, ast.Delete):
+                class_names.difference_update(collector.deleted_names)
+                for name in collector.deleted_names:
+                    class_aliases.pop(name, None)
+                continue
+            if isinstance(
+                statement,
+                (
+                    ast.Assign,
+                    ast.AugAssign,
+                    ast.Import,
+                    ast.ImportFrom,
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef,
+                    ast.ClassDef,
+                ),
+            ):
+                class_names.update(collector.counts)
+                for name in collector.counts:
+                    class_aliases.pop(name, None)
+                for alias in collector.aliases:
+                    sources: set[str] = set()
+                    for source in collector._alias_sources(alias):
+                        sources.update(class_aliases.get(source, {source}))
+                    class_aliases[alias] = sources
+            elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                class_names.update(collector.counts)
+                for name in collector.counts:
+                    class_aliases.pop(name, None)
+                for alias in collector.aliases:
+                    sources = set()
+                    for source in collector._alias_sources(alias):
+                        sources.update(class_aliases.get(source, {source}))
+                    class_aliases[alias] = sources
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self._visit_arguments(node.args)
+        local_names = _collect_lambda_params(node)
+        collector = _ScopeBindingCollector()
+        collector.visit(node.body)
+        self.unknown_alias_mutation |= collector.unknown_alias_mutation
+        local_names.update(collector.counts)
+        self.constructor_mutations.update(
+            name for name in collector.constructor_mutations if name not in local_names
+        )
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in {"setattr", "delattr"}
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in {"__init__", "__new__"}
+        ):
+            self.constructor_mutations.update(self._alias_sources(node.args[0].id))
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if (
+            isinstance(node.ctx, (ast.Store, ast.Del))
+            and node.attr in {"__init__", "__new__"}
+            and isinstance(node.value, ast.Name)
+        ):
+            self.constructor_mutations.update(self._alias_sources(node.value.id))
+        self.generic_visit(node)
+
+    def _visit_function_header(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        self._visit_arguments(node.args)
+        if node.returns is not None:
+            self.visit(node.returns)
+        for type_param in getattr(node, "type_params", ()):
+            self.visit(type_param)
+
+    def _visit_arguments(self, arguments: ast.arguments) -> None:
+        for default in (*arguments.defaults, *arguments.kw_defaults):
+            if default is not None:
+                self.visit(default)
+        all_arguments = (
+            *arguments.posonlyargs,
+            *arguments.args,
+            *arguments.kwonlyargs,
+        )
+        annotations = [argument.annotation for argument in all_arguments]
+        annotations.extend(
+            argument.annotation
+            for argument in (arguments.vararg, arguments.kwarg)
+            if argument is not None
+        )
+        for annotation in annotations:
+            if annotation is not None:
+                self.visit(annotation)
+
+    def visit_comprehension(self, node: ast.comprehension) -> None:
+        # Comprehension targets live in an implicit child scope. Walrus
+        # expressions in their iterables and filters bind in this scope.
+        self.visit(node.iter)
+        for condition in node.ifs:
+            self.visit(condition)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            self._bind(alias.asname or alias.name.split(".")[0])
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            self._bind(alias.asname or alias.name)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name is not None:
+            self._bind(node.name)
+        self.generic_visit(node)
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:
+        if node.name is not None:
+            self._bind(node.name)
+        self.generic_visit(node)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:
+        if node.name is not None:
+            self._bind(node.name)
+
+    def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+        if node.rest is not None:
+            self._bind(node.rest)
+        self.generic_visit(node)
+
+    def visit_Global(self, node: ast.Global) -> None:
+        self.global_names.update(node.names)
+
+    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
+        self.nonlocal_names.update(node.names)
+        for name in node.names:
+            self._bind(name)
+
+
+class _BindingChain:
+    """Persistent lexical-binding chain that avoids cumulative set copies."""
+
+    def __init__(self, names: set[str], parent: _BindingChain | None = None) -> None:
+        self.names = names
+        self.parent = parent
+
+    def __contains__(self, name: str) -> bool:
+        scope: _BindingChain | None = self
+        while scope is not None:
+            if name in scope.names:
+                return True
+            scope = scope.parent
+        return False
+
+
+class _ShadowedNames:
+    """Membership view over local, module, and enclosing bindings without copies."""
+
+    def __init__(
+        self,
+        local: set[str],
+        module: set[str] | None,
+        enclosing: _BindingChain | None,
+        global_names: set[str] | None = None,
+    ) -> None:
+        self.local = local
+        self.module = module
+        self.enclosing = enclosing
+        self.global_names = global_names or set()
+
+    def __contains__(self, name: str) -> bool:
+        if name in self.global_names:
+            return self.module is not None and name in self.module
+        return (
+            name in self.local
+            or (self.module is not None and name in self.module)
+            or (self.enclosing is not None and name in self.enclosing)
+        )
+
+
+def _collect_scope_bindings(
+    scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+) -> _ScopeBindingCollector:
+    collector = _ScopeBindingCollector()
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for parameter in _collect_params(scope):
+            collector._bind(parameter)
+    for statement in scope.body:
+        collector.visit(statement)
+    return collector
+
+
+def _resolve_alias(name: str, aliases: dict[str, str]) -> str:
+    """Resolve a direct-name alias chain without looping on cycles."""
+    seen: set[str] = set()
+    while name in aliases and name not in seen:
+        seen.add(name)
+        name = aliases[name]
+    return name
+
+
+def _collect_module_invalidations(
+    tree: ast.Module,
+) -> tuple[set[str], set[str], bool]:
+    """Return replacement, constructor-mutation, and broad invalidations."""
+    invalidated: set[str] = set()
+    constructor_invalidated: set[str] = set()
+    wildcard_import = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(
+            alias.name == "*" for alias in node.names
+        ):
+            wildcard_import = True
+        elif isinstance(node, ast.Module):
+            bindings = _collect_scope_bindings(node)
+            invalidated.update(bindings.global_rebindings)
+            constructor_invalidated.update(bindings.constructor_mutations)
+            wildcard_import |= bindings.unknown_alias_mutation
+            constructor_invalidated.update(
+                _resolve_alias(source, bindings.aliases)
+                for alias, source in bindings.aliases.items()
+                if alias in bindings.constructor_mutations
+            )
+
+    def visit_scopes(nodes: Sequence[ast.AST], enclosing: _BindingChain | None) -> None:
+        nonlocal wildcard_import
+        for node in nodes:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                bindings = _collect_scope_bindings(node)
+                wildcard_import |= bindings.unknown_alias_mutation
+                bound_names = set(bindings.counts)
+                invalidated.update(bindings.global_names & bound_names)
+                invalidated.update(bindings.global_rebindings)
+                for name in bindings.constructor_mutations:
+                    if name in bindings.global_names or (
+                        name not in bound_names
+                        and name not in bindings.nonlocal_names
+                        and (enclosing is None or name not in enclosing)
+                    ):
+                        constructor_invalidated.add(name)
+                for alias in bindings.constructor_mutations & bindings.aliases.keys():
+                    source = _resolve_alias(alias, bindings.aliases)
+                    if source not in bound_names and (
+                        enclosing is None or source not in enclosing
+                    ):
+                        constructor_invalidated.add(source)
+                closure_names = bound_names - bindings.global_names
+                visit_scopes(node.body, _BindingChain(closure_names, enclosing))
+            elif isinstance(node, ast.ClassDef):
+                # Class namespaces are not enclosing lexical scopes for methods.
+                visit_scopes(node.body, enclosing)
+            else:
+                visit_scopes(list(ast.iter_child_nodes(node)), enclosing)
+
+    visit_scopes(list(tree.body), None)
+    return invalidated, constructor_invalidated, wildcard_import
+
+
+def _is_trivial_class(
+    node: ast.ClassDef, shadowed_names: set[str] | _BindingChain | _ShadowedNames
+) -> bool:
+    """Return whether constructing *node* cannot invoke user-defined code."""
+    safe_exception_base = (
+        len(node.bases) == 1
+        and isinstance(node.bases[0], ast.Name)
+        and node.bases[0].id in {"BaseException", "Exception"}
+        and node.bases[0].id not in shadowed_names
+    )
+    return (
+        (not node.bases or safe_exception_base)
+        and not node.keywords
+        and not node.decorator_list
+        and all(isinstance(statement, ast.Pass) for statement in node.body)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Analyze a single function node
 # ---------------------------------------------------------------------------
@@ -1449,20 +1861,48 @@ def _analyze_func_node(
     is_descriptor_class: bool,
     is_resource_mgmt: bool,
     module_func_names: set[str] | None = None,
+    module_binding_names: set[str] | None = None,
+    enclosing_bindings: _BindingChain | None = None,
 ) -> FunctionRecord:
     """Produce a FunctionRecord for a single def/async def node."""
     param_names = _collect_params(func_node)
-    global_names, nonlocal_names = _collect_declared_names(func_node)
+    scope_bindings = _collect_scope_bindings(func_node)
+    global_names = scope_bindings.global_names
+    nonlocal_names = scope_bindings.nonlocal_names
     open_vars = _collect_open_vars(func_node)
     # Collect names of locally-defined functions and classes visible in this scope:
     # nested functions/classes defined directly inside this function, plus all
     # module-level function/class names (passed by the caller from the module tree).
     # Calls to any of these are statically-resolvable pure local calls or class
     # constructors and are NOT effects.
-    local_func_names: set[str] = set(module_func_names or ())
-    for child in ast.iter_child_nodes(func_node):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            local_func_names.add(child.name)
+    bound_names = set(scope_bindings.counts)
+    direct_definitions = {
+        id(statement)
+        for statement in func_node.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    resolved_local_names = {
+        name
+        for name, function_node in scope_bindings.functions.items()
+        if scope_bindings.counts[name] == 1 and id(function_node) in direct_definitions
+    }
+    class_base_shadows = _ShadowedNames(
+        bound_names,
+        module_binding_names,
+        enclosing_bindings,
+        global_names,
+    )
+    resolved_local_names.update(
+        name
+        for name, class_node in scope_bindings.classes.items()
+        if scope_bindings.counts[name] == 1
+        and id(class_node) in direct_definitions
+        and not scope_bindings.unknown_alias_mutation
+        and name not in scope_bindings.constructor_mutations
+        and _is_trivial_class(class_node, class_base_shadows)
+    )
+    local_func_names = resolved_local_names
+    local_binding_names = bound_names - resolved_local_names
 
     # Collect os.environ subscript assignments at the stmt level
     env_mutation_nodes: list[ast.AST] = []
@@ -1484,6 +1924,9 @@ def _analyze_func_node(
         param_names=param_names,
         open_vars=open_vars,
         local_func_names=local_func_names,
+        local_binding_names=local_binding_names,
+        module_func_names=module_func_names or set(),
+        enclosing_bindings=enclosing_bindings,
     )
 
     # Only visit direct children of the function body (not nested function bodies)
@@ -1564,6 +2007,8 @@ def _walk_class_for_funcs(
     is_descriptor: bool,
     is_resource_mgmt: bool,
     module_func_names: set[str] | None = None,
+    module_binding_names: set[str] | None = None,
+    enclosing_bindings: _BindingChain | None = None,
 ) -> list[FunctionRecord]:
     """Collect FunctionRecords for methods of a class node."""
     records: list[FunctionRecord] = []
@@ -1577,6 +2022,8 @@ def _walk_class_for_funcs(
                 is_descriptor,
                 is_resource_mgmt,
                 module_func_names,
+                module_binding_names,
+                enclosing_bindings,
             )
             records.append(rec)
             # Recurse into nested classes / functions inside method
@@ -1586,6 +2033,10 @@ def _walk_class_for_funcs(
                     filename,
                     import_aliases,
                     module_func_names,
+                    module_binding_names,
+                    _BindingChain(
+                        set(_collect_scope_bindings(item).counts), enclosing_bindings
+                    ),
                 )
             )
         elif isinstance(item, ast.AsyncFunctionDef):
@@ -1597,6 +2048,8 @@ def _walk_class_for_funcs(
                 is_descriptor,
                 is_resource_mgmt,
                 module_func_names,
+                module_binding_names,
+                enclosing_bindings,
             )
             records.append(rec)
             records.extend(
@@ -1605,6 +2058,10 @@ def _walk_class_for_funcs(
                     filename,
                     import_aliases,
                     module_func_names,
+                    module_binding_names,
+                    _BindingChain(
+                        set(_collect_scope_bindings(item).counts), enclosing_bindings
+                    ),
                 )
             )
         elif isinstance(item, ast.ClassDef):
@@ -1619,6 +2076,8 @@ def _walk_class_for_funcs(
                     sub_is_descriptor,
                     sub_is_resource,
                     module_func_names,
+                    module_binding_names,
+                    enclosing_bindings,
                 )
             )
     return records
@@ -1629,6 +2088,8 @@ def _walk_module_body(
     filename: str,
     import_aliases: dict[str, str],
     module_func_names: set[str] | None = None,
+    module_binding_names: set[str] | None = None,
+    enclosing_bindings: _BindingChain | None = None,
 ) -> list[FunctionRecord]:
     """Recursively collect FunctionRecords from a list of AST nodes."""
     records: list[FunctionRecord] = []
@@ -1642,6 +2103,8 @@ def _walk_module_body(
                 False,
                 False,
                 module_func_names,
+                module_binding_names,
+                enclosing_bindings,
             )
             records.append(rec)
             # Recurse into nested defs/classes inside this function
@@ -1651,6 +2114,10 @@ def _walk_module_body(
                     filename,
                     import_aliases,
                     module_func_names,
+                    module_binding_names,
+                    _BindingChain(
+                        set(_collect_scope_bindings(node).counts), enclosing_bindings
+                    ),
                 )
             )
         elif isinstance(node, ast.AsyncFunctionDef):
@@ -1662,6 +2129,8 @@ def _walk_module_body(
                 False,
                 False,
                 module_func_names,
+                module_binding_names,
+                enclosing_bindings,
             )
             records.append(rec)
             records.extend(
@@ -1670,6 +2139,10 @@ def _walk_module_body(
                     filename,
                     import_aliases,
                     module_func_names,
+                    module_binding_names,
+                    _BindingChain(
+                        set(_collect_scope_bindings(node).counts), enclosing_bindings
+                    ),
                 )
             )
         elif isinstance(node, ast.ClassDef):
@@ -1683,6 +2156,8 @@ def _walk_module_body(
                     is_descriptor,
                     is_resource,
                     module_func_names,
+                    module_binding_names,
+                    enclosing_bindings,
                 )
             )
     return records
@@ -1696,21 +2171,45 @@ def _analyze_tree(
     """Produce FunctionRecords from a parsed AST module."""
     import_aliases = _collect_import_aliases(tree)
     sentinel_effects = _collect_sentinels(tree, filename)
+    module_bindings = _collect_scope_bindings(tree)
+    bound_names = set(module_bindings.counts)
+    invalidated_names, constructor_invalidations, wildcard_import = (
+        _collect_module_invalidations(tree)
+    )
+    direct_definitions = {
+        id(statement)
+        for statement in tree.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
 
     # Collect all function and class names defined at module level so that calls
     # to them are not treated as ambiguous (NEVER_DROP carve-out for pure local
     # calls and class constructors).
-    module_func_names: set[str] = {
-        node.name
-        for node in ast.iter_child_nodes(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    module_func_names = {
+        name
+        for name, function_node in module_bindings.functions.items()
+        if module_bindings.counts[name] == 1
+        and id(function_node) in direct_definitions
+        and name not in invalidated_names
     }
+    module_func_names.update(
+        name
+        for name, class_node in module_bindings.classes.items()
+        if module_bindings.counts[name] == 1
+        and id(class_node) in direct_definitions
+        and name not in invalidated_names
+        and name not in constructor_invalidations
+        and not wildcard_import
+        and _is_trivial_class(class_node, bound_names)
+    )
 
     raw_records = _walk_module_body(
         list(ast.iter_child_nodes(tree)),
         filename,
         import_aliases,
         module_func_names,
+        bound_names,
+        None,
     )
 
     # Attach sentinel effects to the first function record in the module.
@@ -1773,7 +2272,14 @@ def analyze_source(
         )
         return []
 
-    records = _analyze_tree(tree, filename, package)
+    try:
+        records = _analyze_tree(tree, filename, package)
+    except BROADENED_EXCEPTIONS as exc:
+        print(
+            f"snake-eyes: skipping {filename}: traversal error: {exc}",
+            file=sys.stderr,
+        )
+        return []
     records.sort(key=lambda r: (r.file, r.line, r.name))
     return records
 

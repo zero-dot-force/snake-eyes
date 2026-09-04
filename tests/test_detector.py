@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from snake_eyes.analysis.detector import analyze_path, analyze_source
+from snake_eyes.analysis.detector import _resolve_alias, analyze_path, analyze_source
 from snake_eyes.analysis.models import FunctionRecord, function_record_to_dict
 
 # ---------------------------------------------------------------------------
@@ -317,14 +317,15 @@ def test_unknown_external_call_is_ambiguous(tmp_path: Path) -> None:
     """unknown_external_call() => CallbackInvocation with confidence='ambiguous'."""
     _copy_fixture("ambiguous.py", tmp_path)
     records = analyze_path(str(tmp_path), None)
-    all_effects = _all_effects(records)
-    cb = [
-        e
-        for e in all_effects
-        if e["type"] == "CallbackInvocation"
-        and e.get("detail", {}).get("confidence") == "ambiguous"
+    target = [record for record in records if record.name == "unknown_external_call"]
+    assert _all_effects(target) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'some_unknown_function'",
+            "location": "ambiguous.py:18:4",
+            "detail": {"confidence": "ambiguous"},
+        }
     ]
-    assert cb, "Unknown external call must produce CallbackInvocation(ambiguous)"
 
 
 def test_pure_local_call_no_effect() -> None:
@@ -683,127 +684,890 @@ def test_depth_budget_skip_valid_file_unaffected(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Issue #18 — CallbackInvocation false positives for class constructors and
-#              imported callables (four-layer call resolution)
+# Issue #18 — CallbackInvocation false positives for same-module class
+#              constructors, without suppressing unresolved calls.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "source,func_name,description",
-    [
-        pytest.param(
-            "from pathlib import Path\ndef f():\n    Path('.')\n",
-            "f",
-            "imported name (from import) suppressed",
-            id="import-from",
-        ),
-        pytest.param(
-            "import json\ndef f():\n    json.loads  # attr, not Name\n"
-            "def g():\n    json  # not a call\n",
-            # This tests that a regular `import X` puts X into import_aliases
-            # and a plain Name call to it is suppressed.
-            "f",
-            "import-statement name suppressed (attr access, not Name call — no effect)",
-            id="import-stmt-attr",
-        ),
-    ],
-)
-def test_import_aware_resolution_no_callback(
-    source: str, func_name: str, description: str
-) -> None:
-    """3.1 — imported name in import_aliases must NOT produce CallbackInvocation."""
-    records = analyze_source(source, "mod.py", "mod")
-    func_records = [r for r in records if r.name == func_name]
-    effects = _all_effects(func_records)
-    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
-    assert cb == [], (
-        f"Imported name must not produce CallbackInvocation ({description}), got {cb}"
-    )
-
-
-def test_import_aware_resolution_direct_call() -> None:
-    """3.1 (supplement) — calling an imported name directly as ast.Name."""
-    source = "from collections import OrderedDict\ndef f():\n    OrderedDict()\n"
-    records = analyze_source(source, "mod.py", "mod")
-    func_records = [r for r in records if r.name == "f"]
-    effects = _all_effects(func_records)
-    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
-    assert cb == [], f"OrderedDict is imported — no CallbackInvocation, got {cb}"
 
 
 def test_module_level_class_no_callback() -> None:
     """3.2 — module-level ClassDef call: no CallbackInvocation."""
     source = "class MyModel:\n    pass\ndef f():\n    MyModel()\n"
     records = analyze_source(source, "mod.py", "mod")
-    func_records = [r for r in records if r.name == "f"]
-    effects = _all_effects(func_records)
-    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
-    assert cb == [], (
-        f"Module-level ClassDef must not produce CallbackInvocation, got {cb}"
-    )
+    assert len(records) == 1
+    assert _all_effects(records) == []
 
 
 def test_nested_class_no_callback() -> None:
     """3.3 — calling a nested class must NOT produce CallbackInvocation."""
     source = "def f():\n    class Inner:\n        pass\n    Inner()\n"
     records = analyze_source(source, "mod.py", "mod")
-    func_records = [r for r in records if r.name == "f"]
-    effects = _all_effects(func_records)
-    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
-    assert cb == [], f"Nested ClassDef must not produce CallbackInvocation, got {cb}"
+    assert len([r for r in records if r.name == "f"]) == 1
+    assert _all_effects([r for r in records if r.name == "f"]) == []
 
 
-def test_pascalcase_heuristic_no_callback() -> None:
-    """3.4 — unknown PascalCase name: no CallbackInvocation."""
-    # UnknownWidget is not imported, not defined locally —
-    # PascalCase heuristic catches it.
-    source = (
-        "def f():\n    UnknownWidget()  # type: ignore[name-defined]  # noqa: F821\n"
-    )
-    records = analyze_source(source, "mod.py", "mod")
-    func_records = [r for r in records if r.name == "f"]
-    effects = _all_effects(func_records)
-    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
-    assert cb == [], f"PascalCase name must not produce CallbackInvocation, got {cb}"
-
-
-def test_unknown_lowercase_still_callback() -> None:
-    """3.5 — unknown lowercase: still CallbackInvocation."""
-    source = (
-        "def f():\n    unknown_helper()  # type: ignore[name-defined]  # noqa: F821\n"
-    )
-    records = analyze_source(source, "mod.py", "mod")
-    func_records = [r for r in records if r.name == "f"]
-    effects = _all_effects(func_records)
-    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
-    assert len(cb) == 1, (
-        f"Unknown lowercase name must produce exactly 1 CallbackInvocation, got {cb}"
-    )
-    assert cb[0].get("detail", {}).get("confidence") == "ambiguous"
-
-
-def test_all_caps_still_callback() -> None:
-    """3.6 — ALL_CAPS: not PascalCase, still CallbackInvocation."""
-    source = (
-        "def f():\n    SOME_CONSTANT()  # type: ignore[name-defined]  # noqa: F821\n"
-    )
-    records = analyze_source(source, "mod.py", "mod")
-    func_records = [r for r in records if r.name == "f"]
-    effects = _all_effects(func_records)
-    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
-    assert len(cb) == 1, (
-        f"ALL_CAPS name must produce CallbackInvocation (not PascalCase), got {cb}"
-    )
-
-
-def test_resolution_order_import_aliases_resolves() -> None:
-    """3.7 — name in import_aliases but NOT in local_func_names still resolves."""
-    # Path is imported (in import_aliases) but not a local function/class def
+def test_imported_name_still_callback() -> None:
+    """Imported callables remain ambiguous without effect-specific resolution."""
     source = "from pathlib import Path\ndef f():\n    Path('.')\n"
     records = analyze_source(source, "mod.py", "mod")
-    func_records = [r for r in records if r.name == "f"]
-    effects = _all_effects(func_records)
-    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
-    assert cb == [], (
-        f"Name in import_aliases must resolve even if not in local_func_names, got {cb}"
+    assert _all_effects(records) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Path'",
+            "location": "mod.py:3:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_imported_side_effectful_name_still_callback() -> None:
+    """A direct import must not hide an effect-specific call from later analysis."""
+    source = "from shutil import rmtree\ndef f(path):\n    rmtree(path)\n"
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects(records) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'rmtree'",
+            "location": "mod.py:3:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_pascalcase_name_still_callback() -> None:
+    """Naming alone cannot establish that a callback is effect-free."""
+    source = "def f():\n    UnknownWidget()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects(records) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'UnknownWidget'",
+            "location": "mod.py:2:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_parameter_shadowing_class_still_callback() -> None:
+    """A parameter binding takes precedence over a module-level class name."""
+    source = "class Handler:\n    pass\ndef f(Handler):\n    Handler()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:4:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_rebinding_class_name_still_callback() -> None:
+    """A function-local assignment shadows a same-named module class."""
+    source = (
+        "class Handler:\n    pass\ndef f(factory):\n"
+        "    Handler = factory\n    Handler()\n"
     )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:5:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_effectful_class_constructor_still_callback() -> None:
+    """Class names are suppressed only when construction cannot run user code."""
+    source = (
+        "class Handler:\n    def __init__(self):\n        pass\n"
+        "def f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:5:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_module_rebinding_class_name_still_callback() -> None:
+    """A module assignment supersedes an otherwise safe class binding."""
+    source = "class Handler:\n    pass\nHandler = factory\ndef f():\n    Handler()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:5:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_shadowed_exception_base_still_callback() -> None:
+    """An exception base name must be proven to be the builtin."""
+    source = (
+        "class Exception:\n    def __init__(self):\n        pass\n"
+        "class Handler(Exception):\n    pass\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:7:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_pattern_capture_class_name_still_callback() -> None:
+    """A capture pattern creates a local binding that shadows a class name."""
+    source = (
+        "class Handler:\n    pass\ndef f(value):\n"
+        "    match value:\n        case Handler:\n            pass\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:7:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source", "function_name", "location"),
+    [
+        (
+            "class Handler:\n    pass\ndef f():\n"
+            "    class Handler:\n        def __init__(self):\n            pass\n"
+            "    Handler()\n",
+            "f",
+            "mod.py:7:4",
+        ),
+        (
+            "class Handler:\n    pass\ndef outer(Handler):\n"
+            "    def inner():\n        Handler()\n",
+            "inner",
+            "mod.py:5:8",
+        ),
+        (
+            "class Handler:\n    pass\nif enabled:\n    Handler = factory\n"
+            "def f():\n    Handler()\n",
+            "f",
+            "mod.py:6:4",
+        ),
+        (
+            "class Handler:\n    pass\nmatch value:\n"
+            "    case {**Handler}:\n        pass\n"
+            "def f():\n    Handler()\n",
+            "f",
+            "mod.py:7:4",
+        ),
+        (
+            "class Exception:\n    pass\ndef outer():\n"
+            "    class Handler(Exception):\n        pass\n    Handler()\n",
+            "outer",
+            "mod.py:6:4",
+        ),
+        (
+            "class Handler:\n    pass\ndef f():\n"
+            "    class Handler:\n        pass\n    class Handler:\n        pass\n"
+            "    Handler()\n",
+            "f",
+            "mod.py:8:4",
+        ),
+    ],
+)
+def test_shadowed_class_boundaries_still_callback(
+    source: str, function_name: str, location: str
+) -> None:
+    """Competing bindings prevent a class call from being proven safe."""
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == function_name]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": location,
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_nested_scope_binding_does_not_shadow_module_class() -> None:
+    """A child function's binding does not belong to its enclosing scope."""
+    source = (
+        "class Handler:\n    pass\ndef outer():\n"
+        "    def inner():\n        Handler = factory\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "outer"]) == []
+
+
+@pytest.mark.parametrize(
+    ("binding", "call_line"),
+    [
+        ("for Handler in factories:\n    pass", 6),
+        ("with manager as Handler:\n    pass", 6),
+        ("try:\n    pass\nexcept Error as Handler:\n    pass", 8),
+        ("import package as Handler", 5),
+        ("def configure(value=(Handler := factory)):\n    pass", 6),
+        ("configure = lambda value=(Handler := factory): None", 5),
+    ],
+)
+def test_module_binding_forms_keep_class_call_ambiguous(
+    binding: str, call_line: int
+) -> None:
+    """Every enclosing-scope binder competes with a safe class definition."""
+    source = f"class Handler:\n    pass\n{binding}\ndef f():\n    Handler()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": f"mod.py:{call_line}:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_binding_after_call_is_conservatively_ambiguous() -> None:
+    """Resolution is scope-wide rather than source-order-sensitive."""
+    source = (
+        "class Handler:\n    pass\ndef f():\n    Handler()\n    Handler = factory\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:4:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_global_declaration_uses_safe_module_class() -> None:
+    """A global declaration does not itself replace the module binding."""
+    source = "class Handler:\n    pass\ndef f():\n    global Handler\n    Handler()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == []
+
+
+@pytest.mark.parametrize(
+    ("source", "function_name", "location"),
+    [
+        (
+            "class Handler:\n    pass\nfrom package import *\n"
+            "def f():\n    Handler()\n",
+            "f",
+            "mod.py:5:4",
+        ),
+        (
+            "if enabled:\n    class Handler:\n        pass\ndef f():\n    Handler()\n",
+            "f",
+            "mod.py:5:4",
+        ),
+        (
+            "class Handler:\n    pass\nHandler.__init__ = callback\n"
+            "def f():\n    Handler()\n",
+            "f",
+            "mod.py:5:4",
+        ),
+        (
+            "class Handler:\n    pass\ndef replace(factory):\n"
+            "    global Handler\n    Handler = factory\ndef f():\n    Handler()\n",
+            "f",
+            "mod.py:7:4",
+        ),
+    ],
+)
+def test_module_class_invalidations_stay_ambiguous(
+    source: str, function_name: str, location: str
+) -> None:
+    """Potential module replacement invalidates safe-class resolution."""
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == function_name]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": location,
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_nested_global_declaration_bypasses_enclosing_binding() -> None:
+    """A nested global declaration resolves against the module, not its closure."""
+    source = (
+        "class Handler:\n    pass\ndef outer(Handler):\n"
+        "    def inner():\n        global Handler\n        Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "inner"]) == []
+
+
+def test_control_flow_global_write_invalidates_module_class() -> None:
+    """A global write is function-wide even when declared under control flow."""
+    source = (
+        "class Handler:\n    pass\ndef replace(factory, enabled):\n"
+        "    if enabled:\n        global Handler\n        Handler = factory\n"
+        "def f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:8:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_control_flow_global_bypasses_enclosing_binding() -> None:
+    """A nested global declaration bypasses closures regardless of placement."""
+    source = (
+        "class Handler:\n    pass\ndef outer(Handler, enabled):\n"
+        "    def inner():\n        if enabled:\n            global Handler\n"
+        "        Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "inner"]) == []
+
+
+@pytest.mark.parametrize("operation", ["setattr", "delattr"])
+def test_module_constructor_call_mutation_stays_ambiguous(operation: str) -> None:
+    """Reflective constructor mutation invalidates safe module classes."""
+    arguments = (
+        'Handler, "__init__", callback'
+        if operation == "setattr"
+        else 'Handler, "__init__"'
+    )
+    source = (
+        f"class Handler:\n    pass\n{operation}({arguments})\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:5:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_local_constructor_mutation_stays_ambiguous() -> None:
+    """A mutated local class is not treated as a safe constructor."""
+    source = (
+        "def f(callback):\n    class Handler:\n        pass\n"
+        "    Handler.__init__ = callback\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:5:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_unrelated_class_attribute_mutation_keeps_constructor_safe() -> None:
+    """Non-constructor attributes do not invalidate a trivial class."""
+    source = (
+        "class Handler:\n    pass\nHandler.label = value\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == []
+
+
+def test_local_attribute_mutation_does_not_invalidate_module_class() -> None:
+    """Mutation through a local shadow does not replace the module class."""
+    source = (
+        "class Handler:\n    pass\ndef mutate(Handler):\n"
+        "    Handler.__init__ = callback\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == []
+
+
+def test_global_constructor_mutation_invalidates_module_class() -> None:
+    """Constructor mutation through an explicit global invalidates the class."""
+    source = (
+        "class Handler:\n    pass\ndef mutate(callback):\n    global Handler\n"
+        '    setattr(Handler, "__init__", callback)\ndef f():\n    Handler()\n'
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:7:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "Handler.__init__ = callback",
+        'setattr(Handler, "__init__", callback)',
+        'delattr(Handler, "__init__")',
+    ],
+)
+def test_implicit_global_constructor_mutation_invalidates_module_class(
+    mutation: str,
+) -> None:
+    """An unbound constructor-mutation target resolves to module scope."""
+    source = (
+        f"class Handler:\n    pass\ndef mutate(callback):\n    {mutation}\n"
+        "def f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:6:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_enclosing_constructor_mutation_does_not_invalidate_module_class() -> None:
+    """A closure mutation targets the enclosing value, not the module class."""
+    source = (
+        "class Handler:\n    pass\ndef outer(Handler, callback):\n"
+        "    def mutate():\n        Handler.__init__ = callback\n"
+        "def f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == []
+
+
+def test_global_exception_base_bypasses_enclosing_binding() -> None:
+    """A global exception base does not resolve through an enclosing parameter."""
+    source = (
+        "def outer(Exception):\n    def inner():\n        global Exception\n"
+        "        class Handler(Exception):\n            pass\n        Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "inner"]) == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "Handler.__init__ = callback",
+        "del Handler.__init__",
+        "Handler.__new__ = callback",
+        "del Handler.__new__",
+        'setattr(Handler, "__init__", callback)',
+        'delattr(Handler, "__init__")',
+        'setattr(Handler, "__new__", callback)',
+        'delattr(Handler, "__new__")',
+    ],
+)
+def test_constructor_mutation_matrix_stays_ambiguous(mutation: str) -> None:
+    """Every statically identifiable constructor mutation invalidates safety."""
+    source = f"class Handler:\n    pass\n{mutation}\ndef f():\n    Handler()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:5:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "class_source",
+    [
+        "@decorator\nclass Handler:\n    pass",
+        "class Handler(metaclass=Meta):\n    pass",
+        "class Handler(CustomBase):\n    pass",
+        'class Handler:\n    "docstring"',
+    ],
+)
+def test_unsafe_class_forms_stay_ambiguous(class_source: str) -> None:
+    """Executable class forms never enter the safe-constructor set."""
+    source = f"{class_source}\ndef f():\n    Handler()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    call_line = len(class_source.splitlines()) + 2
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": f"mod.py:{call_line}:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_class_body_constructor_mutation_invalidates_module_class() -> None:
+    """A class body can mutate a module class through ordinary name lookup."""
+    source = (
+        "class Handler:\n    pass\nclass Mutator:\n"
+        "    Handler.__init__ = callback\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:6:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_class_body_enclosing_mutation_invalidates_local_class() -> None:
+    """A nested class body can mutate a class in its enclosing function."""
+    source = (
+        "def outer(callback):\n    class Handler:\n        pass\n"
+        "    class Mutator:\n        Handler.__init__ = callback\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "outer"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:6:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_class_body_enclosing_mutation_does_not_invalidate_module_class() -> None:
+    """A nested class body resolves an enclosing parameter before the module."""
+    source = (
+        "class Handler:\n    pass\ndef outer(Handler, callback):\n"
+        "    class Mutator:\n        Handler.__init__ = callback\n"
+        "def f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == []
+
+
+def test_class_body_mutation_uses_source_order() -> None:
+    """A later class-namespace binding cannot hide an earlier module mutation."""
+    source = (
+        "class Handler:\n    pass\nclass Mutator:\n"
+        "    Handler.__init__ = callback\n    Handler = replacement\n"
+        "def f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:7:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_lambda_constructor_mutation_invalidates_module_class() -> None:
+    """A lambda body resolves an unbound mutation target at module scope."""
+    source = (
+        "class Handler:\n    pass\nmutate = lambda callback: "
+        'setattr(Handler, "__init__", callback)\ndef f():\n    Handler()\n'
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:5:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_conditional_class_binding_does_not_hide_module_mutation() -> None:
+    """A conditional class binding is not definitely established afterward."""
+    source = (
+        "class Handler:\n    pass\nclass Mutator:\n    if enabled:\n"
+        "        Handler = replacement\n    Handler.__init__ = callback\n"
+        "def f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:8:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_constructor_attribute_on_function_does_not_change_call_safety() -> None:
+    """Constructor-hook mutation invalidation applies only to classes."""
+    source = (
+        "def Handler():\n    pass\nHandler.__init__ = callback\n"
+        "def f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == []
+
+
+def test_class_global_rebinding_invalidates_module_class() -> None:
+    """A class-scope global assignment replaces the module binding."""
+    source = (
+        "class Handler:\n    pass\nclass Mutator:\n    global Handler\n"
+        "    Handler = callback\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:7:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_annotation_only_class_name_does_not_hide_module_mutation() -> None:
+    """An annotation without a value does not establish a class binding."""
+    source = (
+        "class Handler:\n    pass\nclass Mutator:\n    Handler: object\n"
+        "    Handler.__init__ = callback\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:7:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_lambda_walrus_binding_does_not_invalidate_module_class() -> None:
+    """A lambda-local walrus target owns its subsequent constructor mutation."""
+    source = (
+        "class Handler:\n    pass\ndef build(factory, callback):\n"
+        "    return lambda: ((Handler := factory), "
+        'setattr(Handler, "__init__", callback))\ndef f():\n    Handler()\n'
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == []
+
+
+def test_deleted_class_binding_exposes_module_constructor_mutation() -> None:
+    """Deleting a class-local name restores lookup of the module class."""
+    source = (
+        "class Handler:\n    pass\nclass Mutator:\n    Handler = replacement\n"
+        "    del Handler\n    Handler.__init__ = callback\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:8:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Alias = Handler\nAlias.__init__ = callback",
+        "def mutate(callback):\n    Alias = Handler\n    Alias.__init__ = callback",
+    ],
+)
+def test_constructor_mutation_through_direct_alias_invalidates_class(body: str) -> None:
+    """A direct alias names the same class object for constructor mutation."""
+    source = f"class Handler:\n    pass\n{body}\ndef f():\n    Handler()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    call_line = len(source.splitlines())
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": f"mod.py:{call_line}:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Alias = Handler\nAlias2 = Alias\nAlias2.__init__ = callback",
+        "class Mutator:\n    Alias = Handler\n    Alias2 = Alias\n"
+        "    Alias2.__init__ = callback",
+    ],
+)
+def test_constructor_mutation_through_alias_chain_invalidates_class(body: str) -> None:
+    """Constructor mutations propagate through transitive direct-name aliases."""
+    source = f"class Handler:\n    pass\n{body}\ndef f():\n    Handler()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    call_line = len(source.splitlines())
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": f"mod.py:{call_line}:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "alias_change",
+    [
+        "del Alias",
+        "Alias = replacement",
+    ],
+)
+def test_changed_class_alias_does_not_mutate_original_class(alias_change: str) -> None:
+    """Deleted or rebound aliases no longer identify the original class."""
+    source = (
+        "class Handler:\n    pass\nclass Mutator:\n    Alias = Handler\n"
+        f"    {alias_change}\n    Alias.__init__ = callback\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Alias = Handler\nAlias2 = Alias\nAlias = replacement\n"
+        "Alias2.__init__ = callback",
+        "class Mutator:\n    Alias = Handler\n    Alias2 = Alias\n"
+        "    Alias = replacement\n    Alias2.__init__ = callback",
+        "class Mutator:\n    Alias: object = Handler\n    Alias.__init__ = callback",
+        "Alias = Handler\nAlias2 = Alias\nAlias = Alias2\nAlias.__init__ = callback",
+    ],
+)
+def test_alias_snapshot_preserves_constructor_identity(body: str) -> None:
+    """Aliases retain the object resolved when their assignment executes."""
+    source = f"class Handler:\n    pass\n{body}\ndef f():\n    Handler()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    call_line = len(source.splitlines())
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": f"mod.py:{call_line}:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_conditional_alias_rebinding_preserves_possible_constructor() -> None:
+    """A conditional rebind cannot discard the alias's prior class identity."""
+    source = (
+        "class Handler:\n    pass\nAlias = Handler\nif enabled:\n"
+        "    Alias = replacement\nAlias.__init__ = callback\ndef f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:8:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_enclosing_alias_resolves_class_body_constructor_mutation() -> None:
+    """A class-body alias can retain a class from its enclosing function."""
+    source = (
+        "def outer(callback):\n    class Handler:\n        pass\n"
+        "    Alias = Handler\n    class Mutator:\n        Retained = Alias\n"
+        "        Retained.__init__ = callback\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "outer"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:8:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
+
+
+def test_unresolved_alias_cycle_terminates_without_invalidating_class() -> None:
+    """An unresolved alias cycle terminates and does not name a safe class."""
+    source = (
+        "class Handler:\n    pass\nA = B\nB = A\nA.__init__ = callback\n"
+        "def f():\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == []
+
+
+def test_conditional_enclosing_alias_reaches_class_body_mutation() -> None:
+    """All conditional enclosing identities propagate through a class alias."""
+    source = (
+        "class Handler:\n    pass\nclass Other:\n    pass\nAlias = Other\n"
+        "if enabled:\n    Alias = Handler\nclass Mutator:\n    Retained = Alias\n"
+        "    Retained.__init__ = callback\ndef f():\n    Handler()\n    Other()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": "mod.py:12:4",
+            "detail": {"confidence": "ambiguous"},
+        },
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Other'",
+            "location": "mod.py:13:4",
+            "detail": {"confidence": "ambiguous"},
+        },
+    ]
+
+
+def test_resolve_alias_terminates_on_real_cycle() -> None:
+    """Cycle protection applies to an actual cyclic alias map."""
+    assert _resolve_alias("A", {"A": "B", "B": "A"}) == "A"
+
+
+def test_alias_target_overflow_keeps_local_class_ambiguous() -> None:
+    """Alias fan-out overflow fails closed for function-local classes."""
+    branches = "\n".join(
+        f"    if condition_{index}:\n        Alias = Target{index}"
+        for index in range(63)
+    )
+    source = (
+        "def f(callback):\n    class Handler:\n        pass\n    Alias = Initial\n"
+        f"{branches}\n    if final_condition:\n        Alias = Handler\n"
+        "    Alias.__init__ = callback\n    Handler()\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    call_line = len(source.splitlines())
+    assert _all_effects([r for r in records if r.name == "f"]) == [
+        {
+            "type": "CallbackInvocation",
+            "description": "Ambiguous call to 'Handler'",
+            "location": f"mod.py:{call_line}:4",
+            "detail": {"confidence": "ambiguous"},
+        }
+    ]
