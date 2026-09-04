@@ -16,6 +16,7 @@ Public API:
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from typing import Any
 
@@ -115,6 +116,14 @@ _PURE_BUILTINS: frozenset[str] = frozenset(
         "__builtins__",
     }
 )
+
+# ---------------------------------------------------------------------------
+# PascalCase heuristic regex — names matching this pattern are likely class
+# constructors, not opaque callbacks.  Used as a last-resort resolution layer
+# in _handle_call when neither _PURE_BUILTINS, local_func_names, nor
+# import_aliases match.  ALL_CAPS names (e.g., SOME_CONSTANT) do NOT match.
+# ---------------------------------------------------------------------------
+_PASCAL_CASE_RE: re.Pattern[str] = re.compile(r"^[A-Z][a-zA-Z0-9]*$")
 
 # Mutating method names for containers
 _CONTAINER_MUTATING_METHODS: frozenset[str] = frozenset(
@@ -1230,13 +1239,22 @@ class _EffectVisitor(ast.NodeVisitor):
             )
             return
 
-        # Name call: check allowlist → not an effect if pure builtin or local
+        # Name call: four-layer resolution (most-specific-first).
+        #   1. _PURE_BUILTINS  (frozenset lookup)
+        #   2. local_func_names (set lookup — module-level + nested funcs/classes)
+        #   3. import_aliases   (dict key lookup — imported names)
+        #   4. PascalCase regex (likely class constructor heuristic)
+        # Only genuinely unresolvable names fall through to CallbackInvocation.
         if isinstance(fn, ast.Name):
             name = fn.id
             if name in _PURE_BUILTINS:
                 return  # pure builtin, no effect
             if name in self.local_func_names:
                 return  # statically-resolvable pure local call is NOT an effect
+            if name in self.import_aliases:
+                return  # imported name — not an opaque callback
+            if _PASCAL_CASE_RE.match(name):
+                return  # likely class constructor (PascalCase heuristic)
             # Unknown external call → CallbackInvocation ambiguous
             self._add(
                 SideEffectType.CallbackInvocation,
@@ -1436,13 +1454,14 @@ def _analyze_func_node(
     param_names = _collect_params(func_node)
     global_names, nonlocal_names = _collect_declared_names(func_node)
     open_vars = _collect_open_vars(func_node)
-    # Collect names of locally-defined functions visible in this scope: nested
-    # functions defined directly inside this function, plus all module-level function
-    # names (passed by the caller from the module tree).  Calls to any of these are
-    # statically-resolvable pure local calls and are NOT effects.
+    # Collect names of locally-defined functions and classes visible in this scope:
+    # nested functions/classes defined directly inside this function, plus all
+    # module-level function/class names (passed by the caller from the module tree).
+    # Calls to any of these are statically-resolvable pure local calls or class
+    # constructors and are NOT effects.
     local_func_names: set[str] = set(module_func_names or ())
     for child in ast.iter_child_nodes(func_node):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             local_func_names.add(child.name)
 
     # Collect os.environ subscript assignments at the stmt level
@@ -1678,12 +1697,13 @@ def _analyze_tree(
     import_aliases = _collect_import_aliases(tree)
     sentinel_effects = _collect_sentinels(tree, filename)
 
-    # Collect all function names defined at module level so that calls to them
-    # are not treated as ambiguous (NEVER_DROP carve-out for pure local calls).
+    # Collect all function and class names defined at module level so that calls
+    # to them are not treated as ambiguous (NEVER_DROP carve-out for pure local
+    # calls and class constructors).
     module_func_names: set[str] = {
         node.name
         for node in ast.iter_child_nodes(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     }
 
     raw_records = _walk_module_body(

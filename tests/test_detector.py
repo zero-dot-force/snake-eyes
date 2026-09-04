@@ -474,6 +474,9 @@ def test_p0_golden_full_equality(tmp_path: Path) -> None:
     ], f"returns_value mismatch: {dicts['returns_value']}"
 
     # --- raises_error ---
+    # NOTE: MyError is a module-level ClassDef — its constructor call is now
+    # resolved as a known class constructor, not an opaque callback.  The
+    # CallbackInvocation entry that was here before issue #18 was a false positive.
     assert dicts["raises_error"] == [
         {
             "type": "ErrorReturn",
@@ -485,12 +488,6 @@ def test_p0_golden_full_equality(tmp_path: Path) -> None:
             "type": "ErrorSignal",
             "description": "Exception signal via raise",
             "location": "p0.py:14:4",
-        },
-        {
-            "type": "CallbackInvocation",
-            "description": "Ambiguous call to 'MyError'",
-            "location": "p0.py:14:10",
-            "detail": {"confidence": "ambiguous"},
         },
     ], f"raises_error mismatch: {dicts['raises_error']}"
 
@@ -683,3 +680,130 @@ def test_depth_budget_skip_valid_file_unaffected(tmp_path: Path) -> None:
     ok_records = [r for r in records if r.name == "ok"]
     ok_types = {e["type"] for r in _to_dicts(ok_records) for e in r["side_effects"]}
     assert "ReturnValue" in ok_types, f"ok() must emit ReturnValue; got {ok_types}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #18 — CallbackInvocation false positives for class constructors and
+#              imported callables (four-layer call resolution)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "source,func_name,description",
+    [
+        pytest.param(
+            "from pathlib import Path\ndef f():\n    Path('.')\n",
+            "f",
+            "imported name (from import) suppressed",
+            id="import-from",
+        ),
+        pytest.param(
+            "import json\ndef f():\n    json.loads  # attr, not Name\n"
+            "def g():\n    json  # not a call\n",
+            # This tests that a regular `import X` puts X into import_aliases
+            # and a plain Name call to it is suppressed.
+            "f",
+            "import-statement name suppressed (attr access, not Name call — no effect)",
+            id="import-stmt-attr",
+        ),
+    ],
+)
+def test_import_aware_resolution_no_callback(
+    source: str, func_name: str, description: str
+) -> None:
+    """3.1 — imported name in import_aliases must NOT produce CallbackInvocation."""
+    records = analyze_source(source, "mod.py", "mod")
+    func_records = [r for r in records if r.name == func_name]
+    effects = _all_effects(func_records)
+    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
+    assert cb == [], (
+        f"Imported name must not produce CallbackInvocation ({description}), got {cb}"
+    )
+
+
+def test_import_aware_resolution_direct_call() -> None:
+    """3.1 (supplement) — calling an imported name directly as ast.Name."""
+    source = "from collections import OrderedDict\ndef f():\n    OrderedDict()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    func_records = [r for r in records if r.name == "f"]
+    effects = _all_effects(func_records)
+    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
+    assert cb == [], f"OrderedDict is imported — no CallbackInvocation, got {cb}"
+
+
+def test_module_level_class_no_callback() -> None:
+    """3.2 — module-level ClassDef call: no CallbackInvocation."""
+    source = "class MyModel:\n    pass\ndef f():\n    MyModel()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    func_records = [r for r in records if r.name == "f"]
+    effects = _all_effects(func_records)
+    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
+    assert cb == [], (
+        f"Module-level ClassDef must not produce CallbackInvocation, got {cb}"
+    )
+
+
+def test_nested_class_no_callback() -> None:
+    """3.3 — calling a nested class must NOT produce CallbackInvocation."""
+    source = "def f():\n    class Inner:\n        pass\n    Inner()\n"
+    records = analyze_source(source, "mod.py", "mod")
+    func_records = [r for r in records if r.name == "f"]
+    effects = _all_effects(func_records)
+    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
+    assert cb == [], f"Nested ClassDef must not produce CallbackInvocation, got {cb}"
+
+
+def test_pascalcase_heuristic_no_callback() -> None:
+    """3.4 — unknown PascalCase name: no CallbackInvocation."""
+    # UnknownWidget is not imported, not defined locally —
+    # PascalCase heuristic catches it.
+    source = (
+        "def f():\n    UnknownWidget()  # type: ignore[name-defined]  # noqa: F821\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    func_records = [r for r in records if r.name == "f"]
+    effects = _all_effects(func_records)
+    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
+    assert cb == [], f"PascalCase name must not produce CallbackInvocation, got {cb}"
+
+
+def test_unknown_lowercase_still_callback() -> None:
+    """3.5 — unknown lowercase: still CallbackInvocation."""
+    source = (
+        "def f():\n    unknown_helper()  # type: ignore[name-defined]  # noqa: F821\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    func_records = [r for r in records if r.name == "f"]
+    effects = _all_effects(func_records)
+    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
+    assert len(cb) == 1, (
+        f"Unknown lowercase name must produce exactly 1 CallbackInvocation, got {cb}"
+    )
+    assert cb[0].get("detail", {}).get("confidence") == "ambiguous"
+
+
+def test_all_caps_still_callback() -> None:
+    """3.6 — ALL_CAPS: not PascalCase, still CallbackInvocation."""
+    source = (
+        "def f():\n    SOME_CONSTANT()  # type: ignore[name-defined]  # noqa: F821\n"
+    )
+    records = analyze_source(source, "mod.py", "mod")
+    func_records = [r for r in records if r.name == "f"]
+    effects = _all_effects(func_records)
+    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
+    assert len(cb) == 1, (
+        f"ALL_CAPS name must produce CallbackInvocation (not PascalCase), got {cb}"
+    )
+
+
+def test_resolution_order_import_aliases_resolves() -> None:
+    """3.7 — name in import_aliases but NOT in local_func_names still resolves."""
+    # Path is imported (in import_aliases) but not a local function/class def
+    source = "from pathlib import Path\ndef f():\n    Path('.')\n"
+    records = analyze_source(source, "mod.py", "mod")
+    func_records = [r for r in records if r.name == "f"]
+    effects = _all_effects(func_records)
+    cb = [e for e in effects if e["type"] == "CallbackInvocation"]
+    assert cb == [], (
+        f"Name in import_aliases must resolve even if not in local_func_names, got {cb}"
+    )
