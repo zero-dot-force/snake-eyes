@@ -1,24 +1,26 @@
 ## 1. Expand known-name collection
 
-- [x] 1.1 In `_analyze_tree`, add `ast.ClassDef` to the `module_func_names` comprehension so module-level class names are included in the known-callable set
-- [x] 1.2 In `_analyze_single_function`, add `ast.ClassDef` to the nested-child check alongside `FunctionDef`/`AsyncFunctionDef` so nested class names are included in `local_func_names`
+- [x] 1.1 In `_analyze_tree`, add safe trivial `ast.ClassDef` names to `module_func_names`
+- [x] 1.2 In `_analyze_func_node`, add safe trivial nested `ast.ClassDef` names to `local_func_names`
 
-## 2. Add import-aware and PascalCase resolution to `_handle_call`
+## 2. Add scope-aware ClassDef resolution to `_handle_call`
 
-- [x] 2.1 In `_handle_call`, after the `local_func_names` check and before the `CallbackInvocation` fallthrough, add a check against `self.import_aliases` — if the name is a key in `import_aliases`, return without emitting
-- [x] 2.2 Add a PascalCase regex constant (e.g., `_PASCAL_CASE_RE = re.compile(r'^[A-Z][a-zA-Z0-9]*$')`) near the top of detector.py
-- [x] 2.3 In `_handle_call`, after the `import_aliases` check, add a PascalCase pattern match — if the name matches, return without emitting
+- [x] 2.1 Ensure a function parameter shadows a same-named module ClassDef before local-name suppression
+- [x] 2.2 Collect all lexical binding forms without entering child scopes and preserve enclosing-function bindings
+- [x] 2.3 Reject conditional, duplicate, wildcard-imported, globally mutated, and constructor-mutated class bindings
+- [x] 2.4 Bound binding traversal depth and share module/closure resolution state without per-function module-set copies
+- [x] 2.5 Canonicalize direct-name aliases and propagate constructor mutations through transitive and class-body aliases
 
 ## 3. Tests
 
-- [x] 3.1 Add test for import-aware resolution: function calling an imported name (in `import_aliases`) should NOT produce `CallbackInvocation`
 - [x] 3.2 Add test for same-module class resolution: function calling a class defined at module level should NOT produce `CallbackInvocation`
 - [x] 3.3 Add test for nested class resolution: function calling a nested class should NOT produce `CallbackInvocation`
-- [x] 3.4 Add test for PascalCase heuristic: unknown PascalCase name should NOT produce `CallbackInvocation`
-- [x] 3.5 Add test that genuinely unknown lowercase name still produces `CallbackInvocation` (regression guard)
-- [x] 3.6 Add test for ALL_CAPS name (not PascalCase) still producing `CallbackInvocation`
-- [x] 3.7 Add test for resolution order: name in `import_aliases` but not `local_func_names` still resolves (no effect)
-- [x] 3.8 Update `test_p0_golden_full_equality` and any other existing tests that assert `CallbackInvocation` for PascalCase class names or imported names — the behavioral change means these effects will no longer be emitted
+- [x] 3.4 Add tests that imported and PascalCase calls remain ambiguous
+- [x] 3.5 Add a test that a parameter shadows a same-named module ClassDef
+- [x] 3.8 Update existing golden tests only for trivial same-module class constructors; imported and unresolved PascalCase calls remain ambiguous
+- [x] 3.9 Add lexical-scope regressions for control-flow binders, definition headers, closure shadowing, duplicate definitions, and nested-scope isolation
+- [x] 3.10 Add regressions for control-flow-nested globals and direct/reflective constructor mutation
+- [x] 3.11 Add alias regressions for transitive chains, class bodies, annotation, rebinding, deletion, and cycles
 
 ## 4. Verification
 
