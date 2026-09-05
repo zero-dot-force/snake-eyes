@@ -358,12 +358,29 @@ def test_pure_local_call_explicit() -> None:
 
 def test_functions_ordered_by_file_line_name(tmp_path: Path) -> None:
     """functions[] ordered by (file, line, name)."""
-    for name in ("p0.py", "p1.py"):
-        _copy_fixture(name, tmp_path)
+    (tmp_path / "b.py").write_text("def b_only():\n    return 3\n")
+    (tmp_path / "a.py").write_text(
+        "def z_first():\n    return 1\n\n\ndef a_second():\n    return 2\n"
+    )
     records = analyze_path(str(tmp_path), None)
-    dicts = _to_dicts(records)
-    keys = [(r["file"], r["line"], r["name"]) for r in dicts]
-    assert keys == sorted(keys), f"Not ordered by (file,line,name): {keys}"
+
+    assert [(record.file, record.line, record.name) for record in records] == [
+        ("a.py", 1, "z_first"),
+        ("a.py", 5, "a_second"),
+        ("b.py", 1, "b_only"),
+    ]
+
+
+def test_analyze_source_orders_records_by_line() -> None:
+    """analyze_source returns records in source-line order, not name order."""
+    source = "def z_first():\n    return 1\n\n\ndef a_second():\n    return 2\n"
+
+    records = analyze_source(source, "mod.py", "mod")
+
+    assert [(record.file, record.line, record.name) for record in records] == [
+        ("mod.py", 1, "z_first"),
+        ("mod.py", 5, "a_second"),
+    ]
 
 
 def test_side_effects_ordered_by_line_col_type(tmp_path: Path) -> None:

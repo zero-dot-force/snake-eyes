@@ -231,14 +231,13 @@ def test_ordering_by_file_start_line_function(tmp_path: Path) -> None:
 
     result = parse_coverage(str(tmp_path), None)
 
-    keys = [(e["file"], e["start_line"], e["function"]) for e in result]
-    assert keys == sorted(keys), f"Not ordered by (file,start_line,function): {keys}"
-
-    # Extra: within mod_b.py, zz_early must come before aa_late (line order wins)
-    mod_b_funcs = [e["function"] for e in result if e["file"] == "mod_b.py"]
-    assert mod_b_funcs == ["zz_early", "aa_late"], (
-        f"Expected [zz_early, aa_late] by line order, got {mod_b_funcs}"
-    )
+    assert [
+        (entry["file"], entry["start_line"], entry["function"]) for entry in result
+    ] == [
+        ("mod_a.py", 1, "one"),
+        ("mod_b.py", 1, "zz_early"),
+        ("mod_b.py", 5, "aa_late"),
+    ]
 
 
 def test_zero_total_stmts(tmp_path: Path) -> None:

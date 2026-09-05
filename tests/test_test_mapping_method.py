@@ -28,17 +28,23 @@ import os
 import subprocess
 import sys
 import textwrap
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest import mock
 
 import pytest
 from conftest import req, responses
 
-from snake_eyes.analysis._shared import derive_package
+from snake_eyes.analysis._shared import MAX_AST_DEPTH, derive_package
 from snake_eyes.analysis.effects import SideEffectType
 from snake_eyes.analysis.models import Effect, FunctionRecord
 from snake_eyes.protocol import INVALID_PARAMS
-from snake_eyes.quality.assertions import collect_assertions
+from snake_eyes.quality._provenance import _observes_container_state
+from snake_eyes.quality.assertions import (
+    AssertionInfo,
+    ContainerStateObservation,
+    collect_assertions,
+)
 from snake_eyes.quality.mapping import infer_side_effect_type
 from snake_eyes.quality.pairing import pair_tests
 from snake_eyes.quality.pipeline import run_test_mapping
@@ -718,6 +724,961 @@ class TestAssertionTypes:
 
 
 # ---------------------------------------------------------------------------
+# Container-state observation collection (task 2.1)
+# ---------------------------------------------------------------------------
+
+
+class TestContainerStateObservationCollection:
+    """AssertionInfo carries bounded, internal container-state AST evidence."""
+
+    @pytest.mark.parametrize(
+        ("assertion", "expected_kind", "expected_candidate"),
+        [
+            ('assert "beta" in result', "membership", "result"),
+            ("assert len(result) == 3", "len", "result"),
+            ('assert result[1] == "beta"', "subscript", "result"),
+            ('assert result[1:] == ["beta"]', "slice", "result"),
+            (
+                "assert [item.upper() for item in result] == ['ALPHA']",
+                "comprehension",
+                "result",
+            ),
+            ('self.assertIn("beta", result)', "membership", "result"),
+            ("self.assertEqual(len(result), 3)", "len", "result"),
+        ],
+        ids=[
+            "membership",
+            "len",
+            "subscript",
+            "slice",
+            "comprehension",
+            "unittest-membership",
+            "unittest-len",
+        ],
+    )
+    def test_collect_assertions_records_observation_descriptor(
+        self,
+        assertion: str,
+        expected_kind: str,
+        expected_candidate: str,
+    ) -> None:
+        func_node = _parse_func(f"def f():\n    {assertion}\n")
+
+        assertions = collect_assertions(func_node, "tests/test_f.py")
+
+        assert len(assertions) == 1
+        assert [
+            (observation.kind, ast.unparse(observation.candidate))
+            for observation in assertions[0].observations
+        ] == [(expected_kind, expected_candidate)]
+
+    def test_iteration_descriptor_requires_asserted_loop_value(self) -> None:
+        func_node = _parse_func(
+            "def f():\n"
+            "    for item in result:\n"
+            "        assert item > 0\n"
+            "        assert ready\n"
+        )
+
+        assertions = collect_assertions(func_node, "tests/test_f.py")
+
+        assert [
+            [
+                (observation.kind, ast.unparse(observation.candidate))
+                for observation in assertion.observations
+            ]
+            for assertion in assertions
+        ] == [[("iteration", "result")], []]
+
+    @pytest.mark.parametrize(
+        "assertion",
+        [
+            'assert result == ["alpha"]',
+            'assert result.count("alpha") == 1',
+        ],
+        ids=["whole-result-equality", "arbitrary-method"],
+    )
+    def test_unsupported_observation_has_no_descriptor(self, assertion: str) -> None:
+        func_node = _parse_func(f"def f():\n    {assertion}\n")
+
+        assertions = collect_assertions(func_node, "tests/test_f.py")
+
+        assert len(assertions) == 1
+        assert assertions[0].observations == ()
+
+    def test_observations_default_preserves_existing_construction(self) -> None:
+        assertion = AssertionInfo(
+            assertion_type="generic",
+            assertion_location="tests/test_f.py:1",
+            line=1,
+            col=0,
+        )
+
+        assert assertion.observations == ()
+
+    def test_observation_descriptor_is_immutable(self) -> None:
+        func_node = _parse_func("def f():\n    assert len(result) == 1\n")
+        observation = collect_assertions(func_node, "tests/test_f.py")[0].observations[
+            0
+        ]
+
+        with pytest.raises(FrozenInstanceError):
+            observation.kind = "membership"  # type: ignore[misc]
+
+    def test_observation_depth_exhaustion_keeps_assertion_without_evidence(
+        self,
+    ) -> None:
+        func_node = _parse_func('def f():\n    assert result[0] == "alpha"\n')
+        assertion = next(
+            node for node in func_node.body if isinstance(node, ast.Assert)
+        )
+        candidate: ast.expr = ast.Name(id="result", ctx=ast.Load())
+        for _ in range(MAX_AST_DEPTH + 1):
+            candidate = ast.Subscript(
+                value=candidate,
+                slice=ast.Constant(value=0),
+                ctx=ast.Load(),
+            )
+        assertion.test = ast.Compare(
+            left=candidate,
+            ops=[ast.Eq()],
+            comparators=[ast.Constant(value="alpha")],
+        )
+
+        assertions = collect_assertions(func_node, "tests/test_f.py")
+
+        assert len(assertions) == 1
+        assert assertions[0].observations == ()
+
+
+# ---------------------------------------------------------------------------
+# Container-state observation forms (task 1.1)
+# ---------------------------------------------------------------------------
+
+
+class TestContainerStateObservations:
+    """Direct paired-target results expose supported container-state forms."""
+
+    @pytest.mark.parametrize(
+        ("assertion_body", "expected_assertion_type"),
+        [
+            ('    assert "beta" in build_items()\n', "membership"),
+            ("    assert len(build_items()) == 3\n", "equality"),
+            ('    assert build_items()[1] == "beta"\n', "equality"),
+            ('    assert build_items()[1:] == ["beta", "gamma"]\n', "equality"),
+            (
+                "    for item in build_items():\n"
+                '        assert item in ("alpha", "beta", "gamma")\n',
+                "membership",
+            ),
+            (
+                "    assert [item.upper() for item in build_items()] == "
+                '["ALPHA", "BETA", "GAMMA"]\n',
+                "equality",
+            ),
+        ],
+        ids=["membership", "len", "subscript", "slice", "iteration", "comprehension"],
+    )
+    def test_direct_paired_target_result_maps_to_container_mutation(
+        self,
+        tmp_path: Path,
+        assertion_body: str,
+        expected_assertion_type: str,
+    ) -> None:
+        (tmp_path / "containers.py").write_text(
+            "def build_items():\n"
+            '    items = ["gamma"]\n'
+            '    items.append("alpha")\n'
+            '    items.extend(["beta"])\n'
+            "    items.sort()\n"
+            "    return items\n"
+        )
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_containers.py").write_text(
+            "from containers import build_items\n\n\n"
+            "def test_build_items():\n" + assertion_body
+        )
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["target_function"] == "build_items"
+        assert row["assertion_type"] == expected_assertion_type
+        assert row["side_effect_type"] == str(SideEffectType.ContainerMutation)
+
+
+# ---------------------------------------------------------------------------
+# Container-state result provenance (task 1.2)
+# ---------------------------------------------------------------------------
+
+
+class TestContainerStateProvenance:
+    """Only direct, unambiguous paired-target result provenance qualifies."""
+
+    @staticmethod
+    def _write_project(
+        tmp_path: Path,
+        test_body: str,
+        module_prelude: str = "",
+    ) -> str:
+        (tmp_path / "containers.py").write_text(
+            "def build_items():\n"
+            '    items = ["gamma"]\n'
+            '    items.append("alpha")\n'
+            '    items.extend(["beta"])\n'
+            "    items.sort()\n"
+            "    return items\n"
+        )
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        test_source = (
+            "import containers\n"
+            "from containers import build_items\n\n\n"
+            + module_prelude
+            + "def test_build_items():\n"
+            + test_body
+        )
+        (tests / "test_containers.py").write_text(test_source)
+        return test_source
+
+    @pytest.mark.parametrize(
+        "test_body",
+        [
+            "    result = build_items()\n    assert len(result) == 3\n",
+            "    assert len(build_items()) == 3\n",
+            "    assert len(containers.build_items()) == 3\n",
+        ],
+        ids=["simple-local-binding", "direct-bare-call", "direct-qualified-call"],
+    )
+    def test_supported_provenance_maps_to_container_mutation(
+        self,
+        tmp_path: Path,
+        test_body: str,
+    ) -> None:
+        self._write_project(tmp_path, test_body)
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["target_function"] == "build_items"
+        assert rows[0]["assertion_type"] == "equality"
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
+
+    @pytest.mark.parametrize(
+        ("module_prelude", "test_body"),
+        [
+            (
+                "",
+                "    build_items()\n"
+                '    unrelated = ["outside"]\n'
+                "    assert len(unrelated) == 1\n",
+            ),
+            (
+                "",
+                '    assert build_items() == ["alpha", "beta", "gamma"]\n',
+            ),
+            (
+                "",
+                '    assert build_items().count("beta") == 1\n',
+            ),
+            (
+                "def helper():\n    return build_items()\n\n\n",
+                "    build_items()\n    assert len(helper()) == 3\n",
+            ),
+            (
+                "",
+                "    result = build_items()\n"
+                "    alias = result\n"
+                "    assert len(alias) == 3\n",
+            ),
+            (
+                "",
+                "    result, marker = (build_items(), True)\n"
+                "    assert len(result) == 3\n",
+            ),
+            (
+                "",
+                "    result = build_items()\n"
+                "    def observe_nested():\n"
+                "        return len(result)\n"
+                "    assert observe_nested() == 3\n",
+            ),
+            (
+                "",
+                "    if condition:\n"
+                "        result = build_items()\n"
+                "    else:\n"
+                "        result = []\n"
+                "    assert len(result) == 3\n",
+            ),
+            (
+                "",
+                "    holder.items = build_items()\n    assert len(holder.items) == 3\n",
+            ),
+        ],
+        ids=[
+            "unrelated-value",
+            "whole-result-equality",
+            "arbitrary-method",
+            "helper-return",
+            "mutable-alias",
+            "tuple-unpacking",
+            "nested-scope",
+            "control-flow-merge",
+            "unsupported-attribute-assignment",
+        ],
+    )
+    def test_unsupported_or_unrelated_provenance_preserves_return_value(
+        self,
+        tmp_path: Path,
+        module_prelude: str,
+        test_body: str,
+    ) -> None:
+        self._write_project(tmp_path, test_body, module_prelude)
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert rows
+        assert {row["target_function"] for row in rows} == {"build_items"}
+        assert {row["side_effect_type"] for row in rows} == {
+            str(SideEffectType.ReturnValue)
+        }
+
+    def test_provenance_depth_exhaustion_preserves_return_value(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        test_source = self._write_project(
+            tmp_path,
+            '    assert build_items()[0] == "alpha"\n',
+        )
+        test_tree = ast.parse(test_source)
+        test_function = next(
+            node
+            for node in test_tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "test_build_items"
+        )
+        assertion = next(
+            node for node in test_function.body if isinstance(node, ast.Assert)
+        )
+        candidate: ast.expr = ast.Call(
+            func=ast.Name(id="build_items", ctx=ast.Load()),
+            args=[],
+            keywords=[],
+        )
+        for _ in range(MAX_AST_DEPTH + 1):
+            candidate = ast.Subscript(
+                value=candidate,
+                slice=ast.Constant(value=0),
+                ctx=ast.Load(),
+            )
+        assertion.test = ast.Compare(
+            left=candidate,
+            ops=[ast.Eq()],
+            comparators=[ast.Constant(value="alpha")],
+        )
+
+        parsed_test = ("tests/test_containers.py", test_source, test_tree)
+        with (
+            mock.patch(
+                "snake_eyes.quality.pipeline.iter_source_files",
+                return_value=iter([parsed_test]),
+            ),
+            mock.patch(
+                "snake_eyes.quality.pipeline.enumerate_functions_with_spans",
+                return_value=[],
+            ),
+        ):
+            rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ReturnValue)
+
+    def test_same_named_qualified_target_uses_exact_package(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        for module_name in ("pkg_a", "pkg_b"):
+            (tmp_path / f"{module_name}.py").write_text(
+                "def build_items():\n"
+                "    items = []\n"
+                f"    items.append('{module_name}')\n"
+                "    return items\n"
+            )
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_containers.py").write_text(
+            "import pkg_a\n\n\n"
+            "def test_selected_container():\n"
+            "    assert len(pkg_a.build_items()) == 1\n"
+        )
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert rows == [
+            {
+                "test_function": "test_selected_container",
+                "test_file": "tests/test_containers.py",
+                "assertion_location": "tests/test_containers.py:5",
+                "assertion_type": "equality",
+                "target_function": "build_items",
+                "target_package": "pkg_a",
+                "side_effect_type": str(SideEffectType.ContainerMutation),
+                "confidence": 80,
+            },
+            {
+                "test_function": "test_selected_container",
+                "test_file": "tests/test_containers.py",
+                "assertion_location": "tests/test_containers.py:5",
+                "assertion_type": "equality",
+                "target_function": "build_items",
+                "target_package": "pkg_b",
+                "side_effect_type": str(SideEffectType.ReturnValue),
+                "confidence": 80,
+            },
+        ]
+
+    def test_case_only_same_named_target_uses_exact_package(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        for module_name in ("pkg_a", "pkg_b"):
+            (tmp_path / f"{module_name}.py").write_text(
+                "def build_items():\n"
+                "    items = []\n"
+                f"    items.append('{module_name}')\n"
+                "    return items\n"
+            )
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_containers.py").write_text(
+            "import pkg_a\n\n\n"
+            "def test_BUILD_ITEMS():\n"
+            "    assert len(pkg_a.build_items()) == 1\n"
+        )
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 2
+        assert rows[0]["target_package"] == "pkg_a"
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
+        assert rows[0]["confidence"] == 70
+        assert rows[1]["target_package"] == "pkg_b"
+        assert rows[1]["side_effect_type"] == str(SideEffectType.ReturnValue)
+        assert rows[1]["confidence"] == 70
+
+    @pytest.mark.parametrize(
+        "test_body",
+        [
+            (
+                "    build_items = lambda: []\n"
+                "    containers.build_items()\n"
+                "    assert len(build_items()) == 0\n"
+            ),
+            ("    len = observe_size\n    assert len(build_items()) == 3\n"),
+            (
+                "    result = build_items()\n"
+                "    result.clear()\n"
+                "    assert len(result) == 0\n"
+            ),
+            (
+                "    result = build_items()\n"
+                "    alias = result\n"
+                "    alias.clear()\n"
+                "    assert len(result) == 0\n"
+            ),
+            (
+                "    result = build_items()\n"
+                "    result[0] = 'forged'\n"
+                "    assert result[0] == 'forged'\n"
+            ),
+            (
+                "    result = build_items()\n"
+                "    del result[:]\n"
+                "    assert len(result) == 0\n"
+            ),
+            (
+                "    result = build_items()\n"
+                "    assert (result.clear() or len(result)) == 0\n"
+            ),
+        ],
+        ids=[
+            "shadowed-target",
+            "shadowed-len",
+            "direct-mutation",
+            "alias-mutation",
+            "subscript-mutation",
+            "delete-mutation",
+            "in-expression-mutation",
+        ],
+    )
+    def test_shadowed_or_mutated_provenance_preserves_return_value(
+        self,
+        tmp_path: Path,
+        test_body: str,
+    ) -> None:
+        self._write_project(
+            tmp_path,
+            test_body,
+            "def observe_size(value):\n    return 3\n\n\n",
+        )
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert rows
+        assert {row["side_effect_type"] for row in rows} == {
+            str(SideEffectType.ReturnValue)
+        }
+
+    def test_src_layout_import_resolves_to_root_relative_target_package(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        package = tmp_path / "src" / "pkg"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("")
+        (package / "containers.py").write_text(
+            "def build_items():\n"
+            "    items = []\n"
+            "    items.append('alpha')\n"
+            "    return items\n"
+        )
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_containers.py").write_text(
+            "from pkg.containers import build_items\n\n\n"
+            "def test_build_items():\n"
+            "    assert len(build_items()) == 1\n"
+        )
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["target_package"] == "src.pkg.containers"
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
+
+    def test_src_layout_namespace_package_resolves_target(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        namespace = tmp_path / "src" / "acme"
+        namespace.mkdir(parents=True)
+        (namespace / "containers.py").write_text(
+            "def build_items():\n"
+            "    items = []\n"
+            "    items.append('alpha')\n"
+            "    return items\n"
+        )
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_containers.py").write_text(
+            "import acme.containers\n\n\n"
+            "def test_build_items():\n"
+            "    assert len(acme.containers.build_items()) == 1\n"
+        )
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["target_package"] == "src.acme.containers"
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
+
+    def test_function_local_import_resolves_direct_target(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        self._write_project(
+            tmp_path,
+            "    from containers import build_items\n"
+            "    assert len(build_items()) == 3\n",
+        )
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
+
+    @pytest.mark.parametrize("local_import", [False, True], ids=["module", "function"])
+    def test_aliased_import_resolves_direct_target(
+        self,
+        tmp_path: Path,
+        local_import: bool,
+    ) -> None:
+        module_prelude = ""
+        test_body = (
+            "    import containers\n"
+            "    from containers import build_items as make_items\n"
+            "    containers.build_items()\n"
+            "    assert len(make_items()) == 3\n"
+        )
+        if not local_import:
+            module_prelude = (
+                "import containers\n"
+                "from containers import build_items as make_items\n\n\n"
+            )
+            test_body = (
+                "    containers.build_items()\n    assert len(make_items()) == 3\n"
+            )
+        self._write_project(tmp_path, test_body, module_prelude)
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert rows
+        assert {row["side_effect_type"] for row in rows} == {
+            str(SideEffectType.ContainerMutation)
+        }
+
+    def test_relative_function_local_import_resolves_direct_target(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        package = tmp_path / "pkg"
+        test_package = package / "tests"
+        test_package.mkdir(parents=True)
+        (package / "__init__.py").write_text("")
+        (test_package / "__init__.py").write_text("")
+        (package / "containers.py").write_text(
+            "def build_items():\n"
+            "    items = []\n"
+            "    items.append('alpha')\n"
+            "    return items\n"
+        )
+        (test_package / "test_containers.py").write_text(
+            "def test_build_items():\n"
+            "    from ..containers import build_items\n"
+            "    assert len(build_items()) == 1\n"
+        )
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["target_package"] == "pkg.containers"
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
+
+    @pytest.mark.parametrize(
+        "assertion",
+        [
+            "self.assertEqual(1, 1, len(build_items()))",
+            "self.assertEqual(1, 1, msg=len(build_items()))",
+        ],
+        ids=["positional-message", "keyword-message"],
+    )
+    def test_unittest_message_does_not_observe_target_result(
+        self,
+        tmp_path: Path,
+        assertion: str,
+    ) -> None:
+        self._write_project(tmp_path, f"    {assertion}\n")
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ReturnValue)
+
+    @pytest.mark.parametrize(
+        "assertion",
+        [
+            "self.assertEqual(first=len(build_items()), second=3)",
+            'self.assertIn(member="alpha", container=build_items())',
+            "self.assertIs(expr1=build_items()[0], expr2=expected)",
+            "self.assertTrue(expr=len(build_items()) == 3)",
+        ],
+        ids=["equality", "membership", "identity", "one-operand"],
+    )
+    def test_unittest_keyword_operands_observe_target_result(
+        self,
+        tmp_path: Path,
+        assertion: str,
+    ) -> None:
+        self._write_project(tmp_path, f"    {assertion}\n")
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
+
+    def test_module_attribute_replacement_invalidates_target(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        self._write_project(
+            tmp_path,
+            "    assert len(containers.build_items()) == 0\n",
+            "containers.build_items = lambda: []\n\n\n",
+        )
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ReturnValue)
+
+    def test_provenance_index_failure_preserves_prior_mapping(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._write_project(
+            tmp_path,
+            "    result = build_items()\n    assert len(result) == 3\n",
+        )
+
+        with mock.patch(
+            "snake_eyes.quality._provenance.ProvenanceResolver.build_context",
+            side_effect=RecursionError("depth exceeded"),
+        ):
+            rows = run_test_mapping(str(tmp_path), None)
+
+        assert len(rows) == 1
+        assert rows[0]["side_effect_type"] == str(SideEffectType.ReturnValue)
+        assert "disabling container-state provenance" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Paired-target result tracing (task 2.2)
+# ---------------------------------------------------------------------------
+
+
+class TestPairedTargetResultTracing:
+    """The internal tracer accepts only direct, local target provenance."""
+
+    @staticmethod
+    def _resolve(source: str, target_function: str = "build_items") -> bool:
+        func_node = _parse_func(source)
+        assertions = collect_assertions(func_node, "tests/test_f.py")
+        assert len(assertions) == 1
+        return _observes_container_state(
+            assertions[0],
+            func_node,
+            target_function,
+        )
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "def f():\n    result = build_items()\n    assert len(result) == 3\n",
+            "def f():\n    assert len(build_items()) == 3\n",
+            "def f():\n    assert len(containers.build_items()) == 3\n",
+        ],
+        ids=["simple-local-binding", "direct-bare-call", "direct-qualified-call"],
+    )
+    def test_supported_provenance_resolves_true(self, source: str) -> None:
+        assert self._resolve(source) is True
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            (
+                "def f():\n"
+                "    build_items()\n"
+                "    unrelated = ['outside']\n"
+                "    assert len(unrelated) == 1\n"
+            ),
+            "def f():\n    assert build_items() == ['alpha']\n",
+            "def f():\n    assert build_items().count('alpha') == 1\n",
+            (
+                "def f():\n"
+                "    helper = lambda: build_items()\n"
+                "    build_items()\n"
+                "    assert len(helper()) == 3\n"
+            ),
+            (
+                "def f():\n"
+                "    result = build_items()\n"
+                "    alias = result\n"
+                "    assert len(alias) == 3\n"
+            ),
+            (
+                "def f():\n"
+                "    result, marker = (build_items(), True)\n"
+                "    assert len(result) == 3\n"
+            ),
+            (
+                "def f():\n"
+                "    result = build_items()\n"
+                "    def nested():\n"
+                "        return result\n"
+                "    assert len(nested()) == 3\n"
+            ),
+            (
+                "def f():\n"
+                "    if condition:\n"
+                "        result = build_items()\n"
+                "    else:\n"
+                "        result = []\n"
+                "    assert len(result) == 3\n"
+            ),
+            (
+                "def f():\n"
+                "    holder.items = build_items()\n"
+                "    assert len(holder.items) == 3\n"
+            ),
+            "def f():\n    assert len(result := build_items()) == 3\n",
+            (
+                "def f():\n"
+                "    result = build_items()\n"
+                "    result = []\n"
+                "    assert len(result) == 0\n"
+            ),
+        ],
+        ids=[
+            "unrelated-value",
+            "whole-result-equality",
+            "arbitrary-method",
+            "helper-return",
+            "mutable-alias",
+            "tuple-unpacking",
+            "nested-scope",
+            "control-flow-merge",
+            "attribute-assignment",
+            "unsupported-named-expression",
+            "reassigned-local",
+        ],
+    )
+    def test_unsupported_or_ambiguous_provenance_resolves_false(
+        self,
+        source: str,
+    ) -> None:
+        assert self._resolve(source) is False
+
+    def test_qualified_call_depth_exhaustion_resolves_false(self) -> None:
+        qualifier: ast.expr = ast.Name(id="containers", ctx=ast.Load())
+        for index in range(MAX_AST_DEPTH + 1):
+            qualifier = ast.Attribute(
+                value=qualifier,
+                attr=f"level_{index}",
+                ctx=ast.Load(),
+            )
+        candidate = ast.Call(
+            func=ast.Attribute(
+                value=qualifier,
+                attr="build_items",
+                ctx=ast.Load(),
+            ),
+            args=[],
+            keywords=[],
+        )
+        assertion = AssertionInfo(
+            assertion_type="equality",
+            assertion_location="tests/test_f.py:2",
+            line=2,
+            col=4,
+            observations=(ContainerStateObservation(kind="len", candidate=candidate),),
+        )
+        func_node = _parse_func("def f():\n    assert True\n")
+
+        assert _observes_container_state(assertion, func_node, "build_items") is False
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            (
+                "def f():\n"
+                "    for item in build_items():\n"
+                "        item = replacement\n"
+                "        assert item == replacement\n"
+            ),
+            (
+                "def f():\n"
+                "    for item in build_items():\n"
+                "        for item in unrelated:\n"
+                "            assert item > 0\n"
+            ),
+        ],
+        ids=["rebound-loop-value", "nested-loop-shadow"],
+    )
+    def test_rebound_iteration_value_does_not_resolve(self, source: str) -> None:
+        assert self._resolve(source) is False
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            (
+                "def f():\n"
+                "    for item in build_items():\n"
+                "        with manager() as item:\n"
+                "            assert item > 0\n"
+            ),
+            (
+                "def f():\n"
+                "    for item in build_items():\n"
+                "        try:\n"
+                "            risky()\n"
+                "        except Error as item:\n"
+                "            assert item\n"
+            ),
+            (
+                "def f():\n"
+                "    for item in build_items():\n"
+                "        item.value = 3\n"
+                "        assert item.value == 3\n"
+            ),
+        ],
+        ids=["with-binding", "except-binding", "attribute-mutation"],
+    )
+    def test_iteration_binding_escape_does_not_resolve(self, source: str) -> None:
+        assert self._resolve(source) is False
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            (
+                "def f():\n"
+                "    for item in build_items():\n"
+                "        item.clear()\n"
+                "        assert len(item) == 0\n"
+            ),
+            (
+                "def f():\n"
+                "    for item in build_items():\n"
+                "        mutate(item)\n"
+                "        assert item\n"
+            ),
+            (
+                "def f():\n"
+                "    for item in build_items():\n"
+                "        def item():\n"
+                "            return 1\n"
+                "        assert item() == 1\n"
+            ),
+            (
+                "def f(value):\n"
+                "    for item in build_items():\n"
+                "        match value:\n"
+                "            case item:\n"
+                "                assert item\n"
+            ),
+        ],
+        ids=["method-mutation", "argument-escape", "definition", "match-capture"],
+    )
+    def test_more_iteration_escapes_do_not_resolve(self, source: str) -> None:
+        assert self._resolve(source) is False
+
+    @pytest.mark.parametrize(
+        "comprehension",
+        [
+            "[item for item in unrelated]",
+            "{item for item in unrelated}",
+            "{item: item for item in unrelated}",
+            "tuple(item for item in unrelated)",
+        ],
+        ids=["list", "set", "dict", "generator"],
+    )
+    def test_comprehension_binding_shadows_outer_iteration(
+        self,
+        comprehension: str,
+    ) -> None:
+        source = (
+            "def f():\n"
+            "    for item in build_items():\n"
+            f"        assert {comprehension}\n"
+        )
+
+        assert self._resolve(source) is False
+
+
+# ---------------------------------------------------------------------------
 # 8.4 Effect-type inference branches
 # ---------------------------------------------------------------------------
 
@@ -862,6 +1823,344 @@ class TestEffectTypeInference:
 
 
 # ---------------------------------------------------------------------------
+# ContainerMutation effect-type override (task 1.3)
+# ---------------------------------------------------------------------------
+
+
+class TestContainerMutationEffectTypeInference:
+    """Container-state evidence overrides only eligible existing mappings."""
+
+    @staticmethod
+    def _effects(*effect_types: SideEffectType | str) -> tuple[Effect, ...]:
+        return tuple(
+            Effect(type=str(effect_type), description="test")
+            for effect_type in effect_types
+        )
+
+    @pytest.mark.parametrize(
+        "assertion_type",
+        ["equality", "comparison", "identity", "membership", "generic"],
+    )
+    def test_qualifying_non_error_evidence_overrides_return_value(
+        self,
+        assertion_type: str,
+    ) -> None:
+        effects = self._effects(
+            SideEffectType.ReturnValue,
+            SideEffectType.ContainerMutation,
+        )
+
+        result = infer_side_effect_type(
+            assertion_type,
+            effects,
+            observes_container_state=True,
+        )
+
+        assert result == str(SideEffectType.ContainerMutation)
+
+    @pytest.mark.parametrize(
+        ("observes_container_state", "effect_types", "expected"),
+        [
+            (
+                False,
+                (SideEffectType.ContainerMutation, SideEffectType.ReturnValue),
+                SideEffectType.ReturnValue,
+            ),
+            (
+                True,
+                (SideEffectType.ReturnValue,),
+                SideEffectType.ReturnValue,
+            ),
+        ],
+        ids=["evidence-absent", "container-mutation-effect-absent"],
+    )
+    def test_override_requires_evidence_and_container_mutation_effect(
+        self,
+        observes_container_state: bool,
+        effect_types: tuple[SideEffectType, ...],
+        expected: SideEffectType,
+    ) -> None:
+        result = infer_side_effect_type(
+            "membership",
+            self._effects(*effect_types),
+            observes_container_state=observes_container_state,
+        )
+
+        assert result == str(expected)
+
+    @pytest.mark.parametrize(
+        ("assertion_type", "effect_types", "expected"),
+        [
+            (
+                "error_check",
+                (
+                    SideEffectType.ContainerMutation,
+                    SideEffectType.ErrorSignal,
+                    SideEffectType.ErrorReturn,
+                ),
+                SideEffectType.ErrorReturn,
+            ),
+            (
+                "error_check",
+                (SideEffectType.ContainerMutation, SideEffectType.ErrorSignal),
+                SideEffectType.ErrorSignal,
+            ),
+            (
+                "error_check",
+                (SideEffectType.ContainerMutation,),
+                SideEffectType.ErrorReturn,
+            ),
+            (
+                "equality",
+                (SideEffectType.ReturnValue, SideEffectType.ReceiverMutation),
+                SideEffectType.ReturnValue,
+            ),
+            (
+                "comparison",
+                (SideEffectType.GlobalMutation, SideEffectType.ReceiverMutation),
+                SideEffectType.ReceiverMutation,
+            ),
+            (
+                "identity",
+                (SideEffectType.GeneratorYield,),
+                SideEffectType.GeneratorYield,
+            ),
+            (
+                "membership",
+                (SideEffectType.AsyncGeneratorYield,),
+                SideEffectType.AsyncGeneratorYield,
+            ),
+            (
+                "equality",
+                (SideEffectType.GeneratorYield, SideEffectType.ReturnValue),
+                SideEffectType.ReturnValue,
+            ),
+            (
+                "comparison",
+                (SideEffectType.GeneratorYield, SideEffectType.ReceiverMutation),
+                SideEffectType.ReceiverMutation,
+            ),
+            (
+                "identity",
+                (
+                    SideEffectType.AsyncGeneratorYield,
+                    SideEffectType.GeneratorYield,
+                ),
+                SideEffectType.GeneratorYield,
+            ),
+            (
+                "generic",
+                (SideEffectType.GeneratorYield, SideEffectType.GlobalMutation),
+                SideEffectType.GeneratorYield,
+            ),
+            ("generic", (), SideEffectType.ReturnValue),
+            ("equality", ("UnknownFutureEffect",), SideEffectType.ReturnValue),
+            ("membership", (), SideEffectType.ReturnValue),
+        ],
+        ids=[
+            "error-return",
+            "error-signal",
+            "error-fallback",
+            "return-value-p0",
+            "first-p0",
+            "generator-yield",
+            "async-generator-yield",
+            "return-value-over-generator",
+            "p0-over-generator",
+            "generator-over-async-generator",
+            "generic-first-effect",
+            "generic-fallback",
+            "unknown-type",
+            "value-fallback",
+        ],
+    )
+    def test_ineligible_override_preserves_existing_precedence(
+        self,
+        assertion_type: str,
+        effect_types: tuple[SideEffectType | str, ...],
+        expected: SideEffectType,
+    ) -> None:
+        result = infer_side_effect_type(
+            assertion_type,
+            self._effects(*effect_types),
+            observes_container_state=True,
+        )
+
+        assert result == str(expected)
+
+
+# ---------------------------------------------------------------------------
+# ContainerMutation pipeline and protocol contract (task 1.4)
+# ---------------------------------------------------------------------------
+
+
+class TestContainerMutationProtocolContract:
+    """Container-state mappings preserve pipeline and JSON-RPC contracts."""
+
+    EXPECTED_ROWS = [
+        {
+            "test_function": "test_build_alpha",
+            "test_file": "tests/test_containers.py",
+            "assertion_location": "tests/test_containers.py:13",
+            "assertion_type": "equality",
+            "target_function": "build_alpha",
+            "target_package": "containers",
+            "side_effect_type": "ContainerMutation",
+            "confidence": 90,
+        },
+        {
+            "test_function": "test_build_alpha",
+            "test_file": "tests/test_containers.py",
+            "assertion_location": "tests/test_containers.py:14",
+            "assertion_type": "equality",
+            "target_function": "build_alpha",
+            "target_package": "containers",
+            "side_effect_type": "ContainerMutation",
+            "confidence": 90,
+        },
+        {
+            "test_function": "test_build_beta",
+            "test_file": "tests/test_containers.py",
+            "assertion_location": "tests/test_containers.py:7",
+            "assertion_type": "equality",
+            "target_function": "build_beta",
+            "target_package": "containers",
+            "side_effect_type": "ContainerMutation",
+            "confidence": 90,
+        },
+        {
+            "test_function": "test_build_beta",
+            "test_file": "tests/test_containers.py",
+            "assertion_location": "tests/test_containers.py:8",
+            "assertion_type": "membership",
+            "target_function": "build_beta",
+            "target_package": "containers",
+            "side_effect_type": "ContainerMutation",
+            "confidence": 90,
+        },
+    ]
+
+    @staticmethod
+    def _write_project(tmp_path: Path) -> tuple[Path, Path]:
+        source_marker = tmp_path / "source-executed"
+        test_marker = tmp_path / "test-executed"
+        source_lines = [
+            "from pathlib import Path",
+            f"Path({str(source_marker)!r}).write_text('executed')",
+            "",
+            "def build_alpha():",
+            "    items = []",
+            "    items.append('alpha')",
+            "    items.append('omega')",
+            "    return items",
+            "",
+            "",
+            "def build_beta():",
+            "    items = []",
+            "    items.extend(['alpha', 'beta'])",
+            "    return items",
+        ]
+        (tmp_path / "containers.py").write_text("\n".join(source_lines) + "\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        test_lines = [
+            "from pathlib import Path",
+            "from containers import build_alpha, build_beta",
+            f"Path({str(test_marker)!r}).write_text('executed')",
+            "",
+            "def test_build_beta():",
+            "    result = build_beta()",
+            "    assert len(result) == 2",
+            "    assert 'beta' in result",
+            "",
+            "",
+            "def test_build_alpha():",
+            "    result = build_alpha()",
+            "    assert result[0] == 'alpha'",
+            "    assert len(result) == 2",
+        ]
+        (tests / "test_containers.py").write_text("\n".join(test_lines) + "\n")
+        return source_marker, test_marker
+
+    def test_pipeline_rows_are_complete_ordered_and_static_only(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        source_marker, test_marker = self._write_project(tmp_path)
+
+        rows = run_test_mapping(str(tmp_path), None)
+
+        assert not source_marker.exists()
+        assert not test_marker.exists()
+        assert rows == self.EXPECTED_ROWS
+
+    def test_json_rpc_response_has_complete_expected_rows(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        self._write_project(tmp_path)
+        request = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 41,
+                "method": "test_mapping",
+                "params": {"root_path": str(tmp_path)},
+            }
+        )
+        expected_response = {
+            "jsonrpc": "2.0",
+            "id": 41,
+            "result": {"mappings": self.EXPECTED_ROWS},
+        }
+
+        output = _run_server(request + "\n")
+
+        assert output == json.dumps(expected_response, sort_keys=True) + "\n"
+
+    @pytest.mark.slow
+    def test_json_rpc_bytes_match_expected_across_hash_seeds(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        source_marker, test_marker = self._write_project(tmp_path)
+        request = (
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 41,
+                    "method": "test_mapping",
+                    "params": {"root_path": str(tmp_path)},
+                }
+            )
+            + "\n"
+        )
+        expected_response = {
+            "jsonrpc": "2.0",
+            "id": 41,
+            "result": {"mappings": self.EXPECTED_ROWS},
+        }
+        expected_bytes = json.dumps(expected_response, sort_keys=True) + "\n"
+
+        outputs = []
+        for seed in ("0", "1"):
+            result = subprocess.run(
+                [sys.executable, "-m", "snake_eyes", "--stdio"],
+                input=request,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONHASHSEED": seed},
+                timeout=60,
+            )
+            assert result.returncode == 0, result.stderr
+            outputs.append(result.stdout)
+
+        assert not source_marker.exists()
+        assert not test_marker.exists()
+        assert outputs[0] == outputs[1]
+        assert outputs[0] == expected_bytes
+
+
+# ---------------------------------------------------------------------------
 # 8.5 Pipeline on sample_project
 # ---------------------------------------------------------------------------
 
@@ -978,8 +2277,11 @@ class TestPipeline:
         # Two assertions on ONE physical line.  The semicolon is deliberate and
         # safe (ruff-format doesn't reformat files in tmp_path).
         test_src = (
+            "import pkg_a.calc as calc_a\n"
+            "import pkg_b.calc as calc_b\n\n\n"
             "def test_add():\n"
-            "    assert add(1,1)==2; assert add(1,1) in (2,)  # noqa: E702\n"
+            "    assert calc_a.add(1,1)==2; assert calc_b.add(1,1)"
+            " in (2,)  # noqa: E702\n"
         )
         (tests / "test_calc.py").write_text(test_src)
 
@@ -1013,7 +2315,14 @@ class TestPipeline:
         (pkg_b / "math.py").write_text("def add(a, b):\n    return a + b\n")
         tests = tmp_path / "tests"
         tests.mkdir()
-        test_src = "def test_add():\n    add()\n    assert True\n"
+        test_src = (
+            "import pkg_a.math as math_a\n"
+            "import pkg_b.math as math_b\n\n\n"
+            "def test_add():\n"
+            "    math_a.add(1, 1)\n"
+            "    math_b.add(1, 1)\n"
+            "    assert True\n"
+        )
         (tests / "test_math.py").write_text(test_src)
         rows = run_test_mapping(str(tmp_path), None)
         add_rows = [r for r in rows if r["target_function"] == "add"]
@@ -1522,19 +2831,29 @@ class TestPipelineCoverage:
 
     def test_unittest_testcase_attribute_form(self, tmp_path: Path) -> None:
         """unittest.TestCase (attribute form) is detected as TestCase subclass."""
-        (tmp_path / "m.py").write_text("def inc():\n    pass\n")
+        (tmp_path / "m.py").write_text("def inc():\n    return 1\n")
         tests = tmp_path / "tests"
         tests.mkdir()
         (tests / "test_m.py").write_text(
             "import unittest\n"
+            "from m import inc\n\n\n"
             "class TestOps(unittest.TestCase):\n"
             "    def test_inc(self):\n"
-            "        self.assertTrue(True)\n"
+            "        self.assertEqual(inc(), 1)\n"
         )
         rows = run_test_mapping(str(tmp_path), None)
-        funcs = {r["test_function"] for r in rows}
-        # test_inc should be collected as a TestCase method
-        assert any("test_inc" in f for f in funcs) or rows == []
+        assert rows == [
+            {
+                "test_function": "TestOps.test_inc",
+                "test_file": "tests/test_m.py",
+                "assertion_location": "tests/test_m.py:7",
+                "assertion_type": "equality",
+                "target_function": "inc",
+                "target_package": "m",
+                "side_effect_type": "ReturnValue",
+                "confidence": 90,
+            }
+        ]
 
     def test_get_func_node_class_method(self, tmp_path: Path) -> None:
         """Pipeline collects assertions from class.method test functions."""
@@ -1559,20 +2878,40 @@ class TestPipelineCoverage:
         rows = run_test_mapping(str(tmp_path), None)
         assert rows == []
 
-    def test_depth_guard_skips_over_deep_test(self, tmp_path: Path) -> None:
+    def test_depth_guard_skips_over_deep_test(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
         """Over-deep test files are skipped without surfacing as -32603."""
 
         (tmp_path / "prod.py").write_text("def add(a, b):\n    return a + b\n")
         tests = tmp_path / "tests"
         tests.mkdir()
-        # Write a normal test file (the depth guard is tested via mock)
-        (tests / "test_m.py").write_text("def test_add():\n    assert True\n")
+        (tests / "test_deep.py").write_text("def test_deep():\n    assert True\n")
+        (tests / "test_valid.py").write_text(
+            "from prod import add\n\n\n"
+            "def test_add_valid():\n"
+            "    assert add(1, 2) == 3\n"
+        )
         with mock.patch(
-            "snake_eyes.analysis._shared.enumerate_functions_with_spans",
-            side_effect=RecursionError("depth exceeded"),
+            "snake_eyes.quality.pipeline.enumerate_functions_with_spans",
+            side_effect=[RecursionError("depth exceeded"), []],
         ):
             rows = run_test_mapping(str(tmp_path), None)
-        assert isinstance(rows, list)
+        assert rows == [
+            {
+                "test_function": "test_add_valid",
+                "test_file": "tests/test_valid.py",
+                "assertion_location": "tests/test_valid.py:5",
+                "assertion_type": "equality",
+                "target_function": "add",
+                "target_package": "prod",
+                "side_effect_type": "ReturnValue",
+                "confidence": 80,
+            }
+        ]
+        assert "test_mapping skipping tests/test_deep.py" in capsys.readouterr().err
 
 
 class TestStrategy3ActualGraph:
@@ -1676,18 +3015,29 @@ class TestPipelineCoverage2:
 
     def test_testcase_bare_name_detected(self, tmp_path: Path) -> None:
         """class Foo(TestCase) (bare name, not unittest.TestCase) is detected."""
-        (tmp_path / "prod.py").write_text("def inc():\n    pass\n")
+        (tmp_path / "prod.py").write_text("def inc():\n    return 1\n")
         tests = tmp_path / "tests"
         tests.mkdir()
         (tests / "test_m.py").write_text(
-            "from unittest import TestCase\n\n\n"
+            "from unittest import TestCase\n"
+            "from prod import inc\n\n\n"
             "class TestOps(TestCase):\n"
             "    def test_inc(self):\n"
-            "        self.assertTrue(True)\n"
+            "        self.assertEqual(inc(), 1)\n"
         )
         rows = run_test_mapping(str(tmp_path), None)
-        funcs = {r["test_function"] for r in rows}
-        assert any("test_inc" in f for f in funcs) or rows == []
+        assert rows == [
+            {
+                "test_function": "TestOps.test_inc",
+                "test_file": "tests/test_m.py",
+                "assertion_location": "tests/test_m.py:7",
+                "assertion_type": "equality",
+                "target_function": "inc",
+                "target_package": "prod",
+                "side_effect_type": "ReturnValue",
+                "confidence": 90,
+            }
+        ]
 
     def test_get_func_node_returns_none_for_missing_class(self, tmp_path: Path) -> None:
         """_get_func_node returns None when class not found."""

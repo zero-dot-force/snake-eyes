@@ -24,11 +24,11 @@ None.
 
 ## Impact
 
-- Affected implementation: `src/snake_eyes/quality/assertions.py`, `src/snake_eyes/quality/mapping.py`, and `src/snake_eyes/quality/pipeline.py`.
-- Affected tests: test-mapping conformance tests and focused tests for functions whose returned state exposes `.sort()`, `.extend()`, `.append()`, or `.pop()` behavior.
+- Affected implementation: `src/snake_eyes/quality/assertions.py`, `src/snake_eyes/quality/mapping.py`, `src/snake_eyes/quality/pipeline.py`, and the focused `src/snake_eyes/quality/_provenance.py` (import identity, shadowing, mutation invalidation, and paired-target result tracing).
+- Affected tests: test-mapping conformance tests and focused tests for functions whose returned state exposes `.sort()`, `.extend()`, or `.append()` behavior; inaccessible `.pop()` bookkeeping remains intentionally unclaimed.
 - Protocol impact: no method, capability, request, response-field, assertion-type, or side-effect-taxonomy changes; only more accurate `side_effect_type` values in existing mapping rows.
 - Dependencies: no new runtime or development dependencies.
-- Validation: the exact CI workflow gates remain unchanged, and a workspace-local Gaze quality run verifies that qualifying `ContainerMutation` gaps close without suppressing effects or relabeling incidental mutations as covered.
+- Validation: the exact CI workflow gates remain unchanged, and a workspace-local Gaze quality run is required to verify that qualifying `ContainerMutation` gaps close without suppressing effects or relabeling incidental mutations as covered.
 
 ## Constitution Check
 
