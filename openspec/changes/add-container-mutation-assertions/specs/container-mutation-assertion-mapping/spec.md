@@ -121,4 +121,4 @@ The implementation SHALL include isolated assertion-analysis, mapping, pipeline,
 
 #### Scenario: Quality report comparison
 - **WHEN** the before and after workspace-local Gaze quality reports are compared
-- **THEN** qualifying mapped effects are counted by unique identity or source location and unrelated or inaccessible mutation effects remain visible
+- **THEN** each qualifying `(owning target, ContainerMutation)` group is credited by a provenance-qualified mapping at protocol type-level granularity, same-target/same-type effect identities are attributed only to the canonical type the row schema exposes, and unrelated or inaccessible mutation effects remain visible

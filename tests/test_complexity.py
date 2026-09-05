@@ -104,12 +104,21 @@ def test_syntax_error_skipped_no_crash(tmp_path: Path) -> None:
 
 def test_ordering_by_file_line_name(tmp_path: Path) -> None:
     """Entries are ordered by (file, line, name)."""
-    code = "def b(): pass\ndef a(): pass\n"
-    (tmp_path / "mod.py").write_text(code)
+    (tmp_path / "b.py").write_text("def b_only():\n    pass\n")
+    (tmp_path / "a.py").write_text(
+        "def z_first():\n    pass\n\n\ndef a_second():\n    pass\n"
+    )
 
     entries = compute_complexity(str(tmp_path), None)
 
-    assert entries == sorted(entries, key=lambda e: (e["file"], e["line"], e["name"]))
+    assert [
+        (entry["file"], entry["line"], entry["name"], entry["complexity"])
+        for entry in entries
+    ] == [
+        ("a.py", 1, "z_first", 1),
+        ("a.py", 5, "a_second", 1),
+        ("b.py", 1, "b_only", 1),
+    ]
 
 
 def test_byte_identical_determinism(tmp_path: Path) -> None:

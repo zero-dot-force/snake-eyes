@@ -39,15 +39,14 @@ def test_function_record_to_dict_includes_optionals_when_set() -> None:
     )
     record = FunctionRecord("f", "pkg", "pkg/mod.py", 10, (effect,))
     result = function_record_to_dict(record)
-    assert result["side_effects"] == [
-        {
-            "type": "FileSystemWrite",
-            "description": "writes",
-            "location": "mod.py:10:1",
-            "target": "path",
-            "detail": {"mode": "w"},
-        }
-    ]
+    assert len(result["side_effects"]) == 1
+    assert result["side_effects"][0] == {
+        "type": "FileSystemWrite",
+        "description": "writes",
+        "location": "mod.py:10:1",
+        "target": "path",
+        "detail": {"mode": "w"},
+    }
 
 
 def test_type_field_is_canonical_string() -> None:

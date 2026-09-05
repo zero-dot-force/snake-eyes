@@ -67,6 +67,36 @@ def test_extract_signals_not_deduplicated(tmp_path: Path) -> None:
     assert keys.count(("pick", "ReturnValue", "visibility")) == 2
 
 
+def test_extract_signals_orders_returned_projection(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text(
+        "def get_z():\n"
+        '    """Return z."""\n'
+        "    return 'z'\n\n"
+        "def get_a():\n"
+        '    """Return a."""\n'
+        "    return 'a'\n"
+    )
+
+    signals = extract_signals(str(tmp_path), None)
+
+    assert [
+        (
+            signal["package"],
+            signal["function"],
+            signal["side_effect_type"],
+            signal["source"],
+        )
+        for signal in signals
+    ] == [
+        ("m", "get_a", "ReturnValue", "docstring"),
+        ("m", "get_a", "ReturnValue", "naming_convention"),
+        ("m", "get_a", "ReturnValue", "visibility"),
+        ("m", "get_z", "ReturnValue", "docstring"),
+        ("m", "get_z", "ReturnValue", "naming_convention"),
+        ("m", "get_z", "ReturnValue", "visibility"),
+    ]
+
+
 def test_extract_signals_covers_all_sources(tmp_path: Path) -> None:
     (tmp_path / "m.py").write_text(
         '__all__ = ["Repo", "get_record"]\n'

@@ -43,6 +43,17 @@ BROADENED_EXCEPTIONS: tuple[type[Exception], ...] = (
 # ---------------------------------------------------------------------------
 
 
+def _is_plain_len_call(node: ast.AST) -> bool:
+    """Return whether *node* is a bare ``len(x)`` call with no keywords."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "len"
+        and len(node.args) == 1
+        and not node.keywords
+    )
+
+
 def derive_package(rel_path: str) -> str:
     """Return the dotted module path for *rel_path* (root-relative POSIX).
 

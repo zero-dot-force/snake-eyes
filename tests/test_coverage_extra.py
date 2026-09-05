@@ -24,6 +24,7 @@ from snake_eyes.analysis._shared import (
 from snake_eyes.analysis.complexity import compute_complexity
 from snake_eyes.analysis.detector import analyze_source
 from snake_eyes.analysis.models import FunctionRecord, function_record_to_dict
+from snake_eyes.discovery import DiscoveryResult
 
 EFFECTS_DIR = Path(__file__).parent / "fixtures" / "effects"
 COVERAGE_FIXTURES = Path(__file__).parent / "fixtures" / "coverage"
@@ -40,6 +41,26 @@ def _types(records: list[FunctionRecord]) -> set[str]:
 # ---------------------------------------------------------------------------
 # _shared.py coverage
 # ---------------------------------------------------------------------------
+
+
+def test_ordered_file_list_deduplicates_source_before_tests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovered = DiscoveryResult(
+        source_files=("a.py", "shared.py"),
+        test_files=("shared.py", "tests/test_b.py"),
+    )
+    monkeypatch.setattr(
+        "snake_eyes.analysis._shared.discover",
+        mock.Mock(return_value=discovered),
+    )
+    files = ordered_file_list(str(tmp_path), None)
+
+    assert len(files) == 3
+    assert files[0] == "a.py"
+    assert files[1] == "shared.py"
+    assert files[2] == "tests/test_b.py"
 
 
 def test_iter_source_files_non_regular(tmp_path: Path) -> None:

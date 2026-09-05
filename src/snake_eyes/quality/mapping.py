@@ -8,7 +8,8 @@ re-parsing). Consumes ``TIER_MAP`` safely (``get``) with no ``KeyError`` on
 unknown type strings.
 
 Public API:
-- ``infer_side_effect_type(assertion_type, target_effects) -> str``
+- ``infer_side_effect_type(assertion_type, target_effects,
+  observes_container_state=False) -> str``
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ def _effect_type_str(et: SideEffectType) -> str:
 def infer_side_effect_type(
     assertion_type: str,
     target_effects: tuple[Effect, ...],
+    *,
+    observes_container_state: bool = False,
 ) -> str:
     """Infer ``side_effect_type`` from assertion kind and target side effects.
 
@@ -41,6 +44,10 @@ def infer_side_effect_type(
       (fallback).
     - ``generic``: first detected effect if any, else ``"ReturnValue"``
       (fallback).
+
+    Qualifying non-error container-state evidence selects ``ContainerMutation``
+    when that canonical effect is present, before entering the unchanged value or
+    generic chains.
     """
     effect_types: list[str] = [e.type for e in target_effects]
 
@@ -52,6 +59,10 @@ def infer_side_effect_type(
         if err_signal in effect_types:
             return err_signal
         return err_return
+
+    container_mutation = _effect_type_str(SideEffectType.ContainerMutation)
+    if observes_container_state and container_mutation in effect_types:
+        return container_mutation
 
     if assertion_type in _VALUE_TYPES:
         ret_val = _effect_type_str(SideEffectType.ReturnValue)
