@@ -136,10 +136,13 @@ def _classify_signals(params: dict[str, Any] | None) -> dict[str, Any]:
 def _test_mapping(params: dict[str, Any] | None) -> dict[str, Any]:
     root_path, patterns = _validate_analysis_params(params)
     try:
-        mappings = run_test_mapping(root_path, patterns)
+        result = run_test_mapping(root_path, patterns)
     except FileNotFoundError as err:
         raise RpcError(INVALID_PARAMS, str(err)) from err
-    return {"mappings": mappings}
+    return {
+        "mappings": result.mappings,
+        "assertion_detection_confidence": result.assertion_detection_confidence,
+    }
 
 
 DEFAULT_DISPATCH: Mapping[str, Handler] = {

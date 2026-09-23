@@ -419,7 +419,7 @@ class TestCallsiteIntegration:
         (tests / "test_m.py").write_text(
             "def test_add():\n    x = 1 + 2\n    assert x == 3\n"
         )
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         # The false pairing (test_add -> add at confidence 90) must be absent
         false_pairings = [
             r
@@ -478,7 +478,7 @@ class TestStrategy3BFS:
             "    assert True\n"
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         target_rows = [r for r in rows if r["target_function"] == "target"]
         # Strategy 3 must have found target via transitive BFS.
         assert target_rows, (
@@ -900,7 +900,7 @@ class TestContainerStateObservations:
             "def test_build_items():\n" + assertion_body
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         row = rows[0]
@@ -959,7 +959,7 @@ class TestContainerStateProvenance:
     ) -> None:
         self._write_project(tmp_path, test_body)
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["target_function"] == "build_items"
@@ -1038,7 +1038,7 @@ class TestContainerStateProvenance:
     ) -> None:
         self._write_project(tmp_path, test_body, module_prelude)
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert rows
         assert {row["target_function"] for row in rows} == {"build_items"}
@@ -1091,7 +1091,7 @@ class TestContainerStateProvenance:
                 return_value=[],
             ),
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["side_effect_type"] == str(SideEffectType.ReturnValue)
@@ -1115,7 +1115,7 @@ class TestContainerStateProvenance:
             "    assert len(pkg_a.build_items()) == 1\n"
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert rows == [
             {
@@ -1159,7 +1159,7 @@ class TestContainerStateProvenance:
             "    assert len(pkg_a.build_items()) == 1\n"
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 2
         assert rows[0]["target_package"] == "pkg_a"
@@ -1225,7 +1225,7 @@ class TestContainerStateProvenance:
             "def observe_size(value):\n    return 3\n\n\n",
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert rows
         assert {row["side_effect_type"] for row in rows} == {
@@ -1253,7 +1253,7 @@ class TestContainerStateProvenance:
             "    assert len(build_items()) == 1\n"
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["target_package"] == "src.pkg.containers"
@@ -1279,7 +1279,7 @@ class TestContainerStateProvenance:
             "    assert len(acme.containers.build_items()) == 1\n"
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["target_package"] == "src.acme.containers"
@@ -1295,7 +1295,7 @@ class TestContainerStateProvenance:
             "    assert len(build_items()) == 3\n",
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
@@ -1323,7 +1323,7 @@ class TestContainerStateProvenance:
             )
         self._write_project(tmp_path, test_body, module_prelude)
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert rows
         assert {row["side_effect_type"] for row in rows} == {
@@ -1351,7 +1351,7 @@ class TestContainerStateProvenance:
             "    assert len(build_items()) == 1\n"
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["target_package"] == "pkg.containers"
@@ -1372,7 +1372,7 @@ class TestContainerStateProvenance:
     ) -> None:
         self._write_project(tmp_path, f"    {assertion}\n")
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["side_effect_type"] == str(SideEffectType.ReturnValue)
@@ -1394,7 +1394,7 @@ class TestContainerStateProvenance:
     ) -> None:
         self._write_project(tmp_path, f"    {assertion}\n")
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
@@ -1409,7 +1409,7 @@ class TestContainerStateProvenance:
             "containers.build_items = lambda: []\n\n\n",
         )
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["side_effect_type"] == str(SideEffectType.ReturnValue)
@@ -1428,7 +1428,7 @@ class TestContainerStateProvenance:
             "snake_eyes.quality._provenance.ProvenanceResolver.build_context",
             side_effect=RecursionError("depth exceeded"),
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert len(rows) == 1
         assert rows[0]["side_effect_type"] == str(SideEffectType.ReturnValue)
@@ -2088,7 +2088,7 @@ class TestContainerMutationProtocolContract:
     ) -> None:
         source_marker, test_marker = self._write_project(tmp_path)
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
         assert not source_marker.exists()
         assert not test_marker.exists()
@@ -2110,7 +2110,10 @@ class TestContainerMutationProtocolContract:
         expected_response = {
             "jsonrpc": "2.0",
             "id": 41,
-            "result": {"mappings": self.EXPECTED_ROWS},
+            "result": {
+                "mappings": self.EXPECTED_ROWS,
+                "assertion_detection_confidence": 100,
+            },
         }
 
         output = _run_server(request + "\n")
@@ -2137,7 +2140,10 @@ class TestContainerMutationProtocolContract:
         expected_response = {
             "jsonrpc": "2.0",
             "id": 41,
-            "result": {"mappings": self.EXPECTED_ROWS},
+            "result": {
+                "mappings": self.EXPECTED_ROWS,
+                "assertion_detection_confidence": 100,
+            },
         }
         expected_bytes = json.dumps(expected_response, sort_keys=True) + "\n"
 
@@ -2169,11 +2175,11 @@ class TestPipeline:
     """8.5 — pipeline integration on the sample_project fixture."""
 
     def test_pipeline_returns_ge_2_rows(self) -> None:
-        rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+        rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
         assert len(rows) >= 2
 
     def test_all_required_keys_present(self) -> None:
-        rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+        rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
         required = {
             "test_function",
             "test_file",
@@ -2188,7 +2194,7 @@ class TestPipeline:
             assert set(row.keys()) == required
 
     def test_unittest_method_is_collected(self) -> None:
-        rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+        rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
         # TestCounter.test_inc should appear
         funcs = {r["test_function"] for r in rows}
         assert any("test_inc" in f for f in funcs)
@@ -2217,7 +2223,7 @@ class TestPipeline:
             "    assert add(2, 3) == 5",  # line 10
         ]
         (tests / "test_prod.py").write_text("\n".join(lines) + "\n")
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         add_rows = [r for r in rows if r["target_function"] == "add"]
         assert len(add_rows) == 2, f"Expected 2 rows, got {len(add_rows)}"
         line_nums = [int(r["assertion_location"].split(":")[-1]) for r in add_rows]
@@ -2232,7 +2238,7 @@ class TestPipeline:
 
     def test_target_package_equals_derive_package(self) -> None:
         """target_package matches derive_package for a fixture source file."""
-        rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+        rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
         # Find a row targeting calculator.py functions
         calc_rows = [r for r in rows if "calculator" in r["target_package"]]
         assert calc_rows, "Expected at least one row targeting calculator functions"
@@ -2285,7 +2291,7 @@ class TestPipeline:
         )
         (tests / "test_calc.py").write_text(test_src)
 
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         add_rows = [r for r in rows if r["target_function"] == "add"]
 
         # With two packages, strategy-1 name-match fires for both → 4 rows
@@ -2324,7 +2330,7 @@ class TestPipeline:
             "    assert True\n"
         )
         (tests / "test_math.py").write_text(test_src)
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         add_rows = [r for r in rows if r["target_function"] == "add"]
         # Should have rows for both packages
         packages = {r["target_package"] for r in add_rows}
@@ -2350,7 +2356,7 @@ class TestPipeline:
             "def test_add():\n"
             "    assert add(1, 2) == 3\n"
         )
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         add_rows = [r for r in rows if r["target_function"] == "add"]
         assert add_rows, "Expected at least one row pairing test_add to source add"
         expected_pkg = derive_package("calc.py")
@@ -2369,7 +2375,7 @@ class TestPipeline:
         (tests / "test_unrelated.py").write_text(
             "def test_totally_unrelated():\n    assert True\n"
         )
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         assert rows == []
 
 
@@ -2388,14 +2394,20 @@ class TestJsonRpcEndToEnd:
         caps = resp["result"]["capabilities"]
         assert caps["test_mapping"] is True
 
-    def test_test_mapping_returns_mappings_key(self) -> None:
+    def test_test_mapping_returns_two_key_envelope(self) -> None:
         resp = responses(
             _run_server(req("test_mapping", root_path=str(SAMPLE_PROJECT)) + "\n")
         )[0]
         assert "result" in resp
         assert "error" not in resp
-        assert "mappings" in resp["result"]
+        assert set(resp["result"].keys()) == {
+            "mappings",
+            "assertion_detection_confidence",
+        }
         assert isinstance(resp["result"]["mappings"], list)
+        confidence = resp["result"]["assertion_detection_confidence"]
+        assert isinstance(confidence, int)
+        assert 0 <= confidence <= 100
 
     def test_confidence_is_int_in_range(self) -> None:
         resp = responses(
@@ -2470,17 +2482,118 @@ class TestEmptyResults:
         tests = tmp_path / "tests"
         tests.mkdir()
         (tests / "test_x.py").write_text("def test_abc():\n    assert True\n")
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         assert rows == []
 
     def test_e2e_empty_mappings_no_error(self, tmp_path: Path) -> None:
-        """test_mapping returns {"mappings": []} for a no-test project, no error key."""
+        """Empty-mappings result for a no-test project, no error key."""
         resp = responses(
             _run_server(req("test_mapping", root_path=str(tmp_path)) + "\n")
         )[0]
         assert "result" in resp
         assert "error" not in resp
         assert resp["result"]["mappings"] == []
+        assert resp["result"]["assertion_detection_confidence"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Assertion-detection confidence (issue #17)
+# ---------------------------------------------------------------------------
+
+
+class TestAssertionDetectionConfidence:
+    """Pipeline unit tests for assertion_detection_confidence semantics."""
+
+    def test_confidence_all_asserted_is_100(self, tmp_path: Path) -> None:
+        (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_m.py").write_text("def test_add():\n    assert add(1, 2) == 3\n")
+        result = run_test_mapping(str(tmp_path), None)
+        assert result.assertion_detection_confidence == 100
+
+    def test_confidence_partial_round_half_up_33(self, tmp_path: Path) -> None:
+        (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_m.py").write_text(
+            "def test_has_assert():\n    assert add(1, 2) == 3\n\n\n"
+            "def test_no_assert_a():\n    pass\n\n\n"
+            "def test_no_assert_b():\n    pass\n"
+        )
+        result = run_test_mapping(str(tmp_path), None)
+        # 1 detected of 3 -> (100 * 1 + 1) // 3 == 33
+        assert result.assertion_detection_confidence == 33
+
+    def test_confidence_partial_round_half_up_67(self, tmp_path: Path) -> None:
+        (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_m.py").write_text(
+            "def test_a():\n    assert add(1, 2) == 3\n\n\n"
+            "def test_b():\n    assert add(2, 3) == 5\n\n\n"
+            "def test_no_assert():\n    pass\n"
+        )
+        result = run_test_mapping(str(tmp_path), None)
+        # 2 detected of 3 -> (100 * 2 + 1) // 3 == 67
+        assert result.assertion_detection_confidence == 67
+
+    def test_confidence_no_assertions_is_0(self, tmp_path: Path) -> None:
+        (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_m.py").write_text("def test_add():\n    pass\n")
+        result = run_test_mapping(str(tmp_path), None)
+        assert result.assertion_detection_confidence == 0
+
+    def test_confidence_unpaired_test_contributes(self, tmp_path: Path) -> None:
+        (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_m.py").write_text(
+            "def test_add():\n    assert add(1, 2) == 3\n\n\n"
+            "def test_unrelated():\n    assert True\n"
+        )
+        result = run_test_mapping(str(tmp_path), None)
+        # Both test functions carry an assertion -> 100
+        assert result.assertion_detection_confidence == 100
+        # test_unrelated is unpaired (no mapping row) yet still counted
+        assert all(r["test_function"] != "test_unrelated" for r in result.mappings)
+
+    def test_confidence_no_targets_empty_mappings(self, tmp_path: Path) -> None:
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_m.py").write_text("def test_thing():\n    assert True\n")
+        result = run_test_mapping(str(tmp_path), None)
+        assert result.mappings == []
+        assert result.assertion_detection_confidence == 100
+
+    def test_confidence_no_test_functions_is_0(self, tmp_path: Path) -> None:
+        (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
+        result = run_test_mapping(str(tmp_path), None)
+        assert result.mappings == []
+        assert result.assertion_detection_confidence == 0
+
+    def test_confidence_degenerate_walk_not_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_m.py").write_text(
+            "def test_add():\n    add()\n    assert True\n"
+        )
+        with mock.patch(
+            "snake_eyes.quality.pipeline.collect_assertions",
+            side_effect=RecursionError("depth exceeded"),
+        ):
+            result = run_test_mapping(str(tmp_path), None)
+        assert result.mappings == []
+        assert result.assertion_detection_confidence == 0
+
+    def test_confidence_stable_across_runs(self) -> None:
+        r1 = run_test_mapping(str(SAMPLE_PROJECT), None)
+        r2 = run_test_mapping(str(SAMPLE_PROJECT), None)
+        assert r1.assertion_detection_confidence == r2.assertion_detection_confidence
+        assert r1.mappings == r2.mappings
 
 
 # ---------------------------------------------------------------------------
@@ -2501,7 +2614,7 @@ class TestSafety:
         with mock.patch(
             "snake_eyes.analysis._shared.is_analyzable_file", return_value=False
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
         assert isinstance(rows, list)
 
     def test_filenotfounderror_propagates(self) -> None:
@@ -2527,7 +2640,7 @@ class TestSafety:
             "snake_eyes.quality.pairing._build_call_graph",
             side_effect=MemoryError("OOM"),
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
         assert isinstance(rows, list)
 
 
@@ -2582,8 +2695,8 @@ class TestAstroidCacheIsolation:
         t2.mkdir()
         t2_src = "def test_multiply():\n    multiply()\n    assert True\n"
         (t2 / "test_n.py").write_text(t2_src)
-        rows1 = run_test_mapping(str(p1), None)
-        rows2 = run_test_mapping(str(p2), None)
+        rows1 = run_test_mapping(str(p1), None).mappings
+        rows2 = run_test_mapping(str(p2), None).mappings
         # Results should be independent
         funcs1 = {r["target_function"] for r in rows1}
         funcs2 = {r["target_function"] for r in rows2}
@@ -2606,7 +2719,7 @@ class TestStaticOnlySentinel:
         """run_test_mapping does not spawn pytest as a subprocess."""
         with mock.patch("subprocess.run") as mock_run:
             with mock.patch("subprocess.Popen") as mock_popen:
-                rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+                rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
                 mock_run.assert_not_called()
                 mock_popen.assert_not_called()
         assert isinstance(rows, list)
@@ -2614,7 +2727,7 @@ class TestStaticOnlySentinel:
     def test_no_coverage_read(self) -> None:
         """run_test_mapping does not call parse_coverage."""
         with mock.patch("snake_eyes.coverage.parse_coverage") as mock_cov:
-            rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+            rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
             mock_cov.assert_not_called()
         assert isinstance(rows, list)
 
@@ -2633,7 +2746,7 @@ class TestStaticOnlySentinel:
 
         with mock.patch.object(builtins, "exec", patched_exec):
             with mock.patch.object(builtins, "eval", patched_eval):
-                rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+                rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
         assert exec_called == [], "exec was called during test mapping"
         assert eval_called == [], "eval was called during test mapping"
         assert isinstance(rows, list)
@@ -2648,14 +2761,14 @@ class TestPathFields:
     """8.15 — test_file and path-valued fields are root-relative POSIX."""
 
     def test_test_file_is_relative_posix(self) -> None:
-        rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+        rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
         for row in rows:
             path = row["test_file"]
             assert not path.startswith("/"), f"test_file is absolute: {path}"
             assert "\\" not in path, f"test_file uses backslash: {path}"
 
     def test_assertion_location_is_relative_posix(self) -> None:
-        rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+        rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
         for row in rows:
             loc = row["assertion_location"]
             path_part = loc.rsplit(":", 1)[0]
@@ -2841,7 +2954,7 @@ class TestPipelineCoverage:
             "    def test_inc(self):\n"
             "        self.assertEqual(inc(), 1)\n"
         )
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         assert rows == [
             {
                 "test_function": "TestOps.test_inc",
@@ -2857,7 +2970,7 @@ class TestPipelineCoverage:
 
     def test_get_func_node_class_method(self, tmp_path: Path) -> None:
         """Pipeline collects assertions from class.method test functions."""
-        rows = run_test_mapping(str(SAMPLE_PROJECT), None)
+        rows = run_test_mapping(str(SAMPLE_PROJECT), None).mappings
         # TestCounter.test_inc should produce rows
         class_method_rows = [r for r in rows if "." in r["test_function"]]
         # Should have at least the TestCounter.test_inc row
@@ -2866,7 +2979,7 @@ class TestPipelineCoverage:
     def test_no_test_files_returns_empty(self, tmp_path: Path) -> None:
         """Pipeline returns [] when there are no test files."""
         (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n")
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         assert rows == []
 
     def test_empty_test_functions_no_target(self, tmp_path: Path) -> None:
@@ -2875,7 +2988,7 @@ class TestPipelineCoverage:
         tests = tmp_path / "tests"
         tests.mkdir()
         (tests / "test_m.py").write_text("def helper():\n    pass\n")
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         assert rows == []
 
     def test_depth_guard_skips_over_deep_test(
@@ -2898,7 +3011,7 @@ class TestPipelineCoverage:
             "snake_eyes.quality.pipeline.enumerate_functions_with_spans",
             side_effect=[RecursionError("depth exceeded"), []],
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
         assert rows == [
             {
                 "test_function": "test_add_valid",
@@ -2928,7 +3041,7 @@ class TestStrategy3ActualGraph:
             "def test_nothing_by_name():\n    helper()\n    assert True\n"
         )
         # Run the full pipeline - strategy 3 may or may not fire depending on astroid
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         # Just verify no crash
         assert isinstance(rows, list)
 
@@ -2953,7 +3066,7 @@ class TestStrategy3ActualGraph:
             "snake_eyes.quality.pairing._build_call_graph",
             return_value=broken_graph,
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
         assert isinstance(rows, list)
 
     def test_dedup_key_prevents_duplicate_pairs(self, tmp_path: Path) -> None:
@@ -2992,7 +3105,7 @@ class TestStrategy3ActualGraph:
             raise RuntimeError("simulated parse error")
 
         with mock.patch.object(_astroid.MANAGER, "ast_from_file", raise_for_rel):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
         assert isinstance(rows, list)
 
     def test_strategy3_outer_exception_degrades(self, tmp_path: Path) -> None:
@@ -3006,7 +3119,7 @@ class TestStrategy3ActualGraph:
             "snake_eyes.quality.pairing.astroid.MANAGER.clear_cache",
             side_effect=RuntimeError("cache clear failed"),
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
         assert isinstance(rows, list)
 
 
@@ -3025,7 +3138,7 @@ class TestPipelineCoverage2:
             "    def test_inc(self):\n"
             "        self.assertEqual(inc(), 1)\n"
         )
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
         assert rows == [
             {
                 "test_function": "TestOps.test_inc",
@@ -3066,7 +3179,7 @@ class TestPipelineCoverage2:
             "snake_eyes.quality.pipeline.collect_assertions",
             side_effect=RecursionError("depth exceeded"),
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
         assert isinstance(rows, list)
 
     def test_assertion_broadened_exception_skipped(self, tmp_path: Path) -> None:
@@ -3080,7 +3193,7 @@ class TestPipelineCoverage2:
             "snake_eyes.quality.pipeline.collect_assertions",
             side_effect=OSError("IO error"),
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
         assert isinstance(rows, list)
 
     def test_pair_tree_none_continues(self, tmp_path: Path) -> None:
@@ -3104,7 +3217,7 @@ class TestPipelineCoverage2:
         with mock.patch(
             "snake_eyes.quality.pipeline.pair_tests", return_value=[fake_pair]
         ):
-            rows = run_test_mapping(str(tmp_path), None)
+            rows = run_test_mapping(str(tmp_path), None).mappings
         assert rows == []
 
 
@@ -3152,7 +3265,7 @@ class TestPairingCoverage2:
             original()
 
         with mock.patch.object(_astroid.MANAGER, "clear_cache", spy_clear):
-            run_test_mapping(str(tmp_path), None)
+            run_test_mapping(str(tmp_path), None).mappings
         # finally-clear is unconditional, so clear_calls must be non-empty.
         assert clear_calls
 

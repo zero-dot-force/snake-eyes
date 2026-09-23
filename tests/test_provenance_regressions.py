@@ -37,7 +37,7 @@ def test_provenance_failure_retains_duplicate_name_pairings(
         "snake_eyes.quality._provenance.ProvenanceResolver.build_context",
         side_effect=RecursionError("depth exceeded"),
     ):
-        rows = run_test_mapping(str(tmp_path), None)
+        rows = run_test_mapping(str(tmp_path), None).mappings
 
     assert len(rows) == 2
     assert [row["target_package"] for row in rows] == ["pkg_a", "pkg_b"]
@@ -62,7 +62,7 @@ def test_source_layout_prefix_is_removed_when_not_a_package(
         "    assert len(acme.containers.build_items()) == 1\n"
     )
 
-    rows = run_test_mapping(str(tmp_path), None)
+    rows = run_test_mapping(str(tmp_path), None).mappings
 
     assert len(rows) == 1
     assert rows[0]["target_package"] == f"{layout_root}.acme.containers"
@@ -87,7 +87,7 @@ def test_prefix_is_preserved_when_it_is_an_importable_package(
         f"    assert len({package_name}.containers.build_items()) == 1\n"
     )
 
-    rows = run_test_mapping(str(tmp_path), None)
+    rows = run_test_mapping(str(tmp_path), None).mappings
 
     assert len(rows) == 1
     assert rows[0]["target_package"] == f"{package_name}.containers"
@@ -129,7 +129,7 @@ def test_unittest_method_specific_keywords_observe_container_state(
         f"    {assertion}\n"
     )
 
-    rows = run_test_mapping(str(tmp_path), None)
+    rows = run_test_mapping(str(tmp_path), None).mappings
 
     assert len(rows) == 1
     assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
@@ -151,7 +151,7 @@ def test_source_layout_namespace_package_without_init_py(
         f"    assert len({layout_root}.containers.build_items()) == 1\n"
     )
 
-    rows = run_test_mapping(str(tmp_path), None)
+    rows = run_test_mapping(str(tmp_path), None).mappings
 
     assert len(rows) == 1
     assert rows[0]["target_package"] == f"{layout_root}.containers"
@@ -173,7 +173,7 @@ def test_imported_module_escape_invalidates_target_provenance(
         "    assert len(containers.build_items()) == 0\n"
     )
 
-    rows = run_test_mapping(str(tmp_path), None)
+    rows = run_test_mapping(str(tmp_path), None).mappings
 
     assert rows
     assert {row["side_effect_type"] for row in rows} == {
@@ -204,7 +204,7 @@ def test_same_module_duplicate_target_disables_override(
         "    assert len(build_items()) == 1\n"
     )
 
-    rows = run_test_mapping(str(tmp_path), None)
+    rows = run_test_mapping(str(tmp_path), None).mappings
 
     assert rows
     assert {row["side_effect_type"] for row in rows} == {
@@ -236,7 +236,7 @@ def test_unittest_auxiliary_keywords_observe_container_state(
         f"    {assertion}\n"
     )
 
-    rows = run_test_mapping(str(tmp_path), None)
+    rows = run_test_mapping(str(tmp_path), None).mappings
 
     assert len(rows) == 1
     assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
@@ -264,7 +264,7 @@ def test_bare_assert_method_form_membership_observes_container_state(
         f"    {assertion}\n"
     )
 
-    rows = run_test_mapping(str(tmp_path), None)
+    rows = run_test_mapping(str(tmp_path), None).mappings
 
     assert len(rows) == 1
     assert rows[0]["side_effect_type"] == str(SideEffectType.ContainerMutation)
