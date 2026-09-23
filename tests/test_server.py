@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
 from conftest import req, responses
@@ -345,3 +346,11 @@ def test_boolean_id_yields_null(request_id: bool) -> None:
     )
     stdout, _ = _run(raw + "\n")
     assert responses(stdout)[0]["id"] is None
+
+
+def test_test_mapping_response_shape(tmp_path: Path) -> None:
+    stdout, _ = _run(req("test_mapping", root_path=str(tmp_path)) + "\n")
+    result = responses(stdout)[0]["result"]
+    assert set(result.keys()) == {"mappings", "assertion_detection_confidence"}
+    assert result["mappings"] == []
+    assert result["assertion_detection_confidence"] == 0

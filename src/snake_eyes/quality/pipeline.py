@@ -2,11 +2,12 @@
 
 FRESH — not lifted from gaze-py. No provenance header required.
 
-Orchestrates discovery → analysis → test-function collection → pairing →
-assertion detection → effect-type inference → serialization.
+Orchestrates discovery → analysis → test-function collection →
+assertion detection → confidence computation → pairing → effect-type
+inference → serialization.
 
 Public API:
-- ``run_test_mapping(root_path, patterns) -> list[dict]``
+- ``run_test_mapping(root_path, patterns) -> TestMappingResult``
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import ast
 import pathlib
 import sys
+from dataclasses import dataclass
 from typing import Any
 
 from ..analysis._shared import (
@@ -115,143 +117,195 @@ def _load_test_trees(
     return test_trees, test_functions
 
 
-def _collect_assertion_context(
+def _collect_provenance(
     pair_tree: ast.Module,
     test_file: str,
     test_function: str,
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
     resolver: ProvenanceResolver,
-) -> (
-    tuple[
-        ast.FunctionDef | ast.AsyncFunctionDef,
-        list[AssertionInfo],
-        Any,
-        bool,
-    ]
-    | None
-):
-    """Collect assertions and optional provenance for one test function."""
-    func_node = _get_func_node(pair_tree, test_function)
-    if func_node is None:
-        return None
-    try:
-        assertions = collect_assertions(func_node, test_file)
-    except RecursionError:
-        print(
-            f"snake-eyes: test_mapping skipping assertions in"
-            f" {test_file}/{test_function}: depth budget exceeded",
-            file=sys.stderr,
-        )
-        return None
-    except BROADENED_EXCEPTIONS as exc:
-        print(
-            f"snake-eyes: test_mapping skipping assertions in"
-            f" {test_file}/{test_function}: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
-        return None
+) -> tuple[Any, bool]:
+    """Build container-state provenance context for one test function.
 
+    Returns ``(provenance_context, provenance_ready)``. Falls back to an empty
+    context (with ``provenance_ready=False``) when provenance construction
+    raises, mirroring the container-mutation path.
+    """
     try:
-        provenance_context = resolver.build_context(pair_tree, test_file, func_node)
+        return resolver.build_context(pair_tree, test_file, func_node), True
     except BROADENED_EXCEPTIONS as exc:
         print(
             f"snake-eyes: test_mapping disabling container-state provenance in"
             f" {test_file}/{test_function}: {type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
-        return func_node, assertions, resolver.empty_context(), False
-    return func_node, assertions, provenance_context, True
+        return resolver.empty_context(), False
+
+
+@dataclass
+class TestMappingResult:
+    """Result of the test-mapping pipeline.
+
+    ``mappings`` is the ordered list of protocol mapping rows (empty when
+    there are no pairs). ``assertion_detection_confidence`` is the rounded
+    percentage (0–100) of collected test functions in which at least one
+    assertion was detected.
+    """
+
+    mappings: list[dict[str, Any]]
+    assertion_detection_confidence: int
 
 
 def run_test_mapping(
     root_path: str,
     patterns: list[str] | None,
-) -> list[dict[str, Any]]:
-    """Run the test-mapping pipeline and return deterministic protocol rows.
+) -> TestMappingResult:
+    """Run the full test-mapping pipeline and return a result object.
 
-    Each row contains exactly ``test_function``, ``test_file``,
-    ``assertion_location``, ``assertion_type``, ``target_function``,
-    ``target_package``, ``side_effect_type``, and ``confidence``. The function
-    returns ``[]`` when there are no pairs and raises ``FileNotFoundError`` when
-    ``root_path`` is not a directory. Analysis is static and never executes
-    analyzed source or tests.
+    Each mapping row is a dict with exactly these keys:
+    ``test_function, test_file, assertion_location, assertion_type,
+    target_function, target_package, side_effect_type, confidence``.
+
+    Returns a :class:`TestMappingResult` whose ``mappings`` is ``[]`` when
+    there are no pairs, and whose ``assertion_detection_confidence`` is the
+    rounded percentage of collected test functions with at least one
+    detected assertion (``0`` when no test functions are collected).
+
+    Raises ``FileNotFoundError`` when ``root_path`` is not a directory
+    (caller maps to -32602).
+
+    Static only: never runs pytest, reads coverage, or executes analyzed code.
     """
+    # 1. Discover source and test files.
     discovered = discover(root_path, patterns)
     source_files = set(discovered.source_files)
+
+    # 2. Analyze production (source) files for side effects.
     target_records = [
         record
         for record in analyze_path(root_path, patterns)
         if record.file in source_files
     ]
+
     root = pathlib.Path(root_path).resolve()
+    resolver = ProvenanceResolver(root)
+
+    # 3. Parse test files and collect test functions.
     test_files = list(discovered.test_files)
     test_trees, test_functions = _load_test_trees(root_path, test_files)
-    if not test_functions or not target_records:
-        return []
 
-    graph_files = list(discovered.source_files) + list(discovered.test_files)
-    pairs = pair_tests(
-        test_functions=test_functions,
-        target_records=target_records,
-        test_trees=test_trees,
-        root_abs=str(root),
-        graph_files=graph_files,
-    )
-    if not pairs:
-        return []
+    # 4. Collect assertions + provenance context for every collected test
+    #    function (paired or not) into maps keyed by (test_function, test_file).
+    #    `collect_assertions` swallows RecursionError internally and returns
+    #    partial results, so a degenerate walk yields a partial list rather
+    #    than an error.
+    assertions_by_test: dict[tuple[str, str], list[AssertionInfo]] = {}
+    contexts_by_test: dict[
+        tuple[str, str],
+        tuple[ast.FunctionDef | ast.AsyncFunctionDef, Any, bool],
+    ] = {}
+    for test_name, rel_path in test_functions:
+        test_tree = test_trees.get(rel_path)
+        if test_tree is None:
+            assertions_by_test[(test_name, rel_path)] = []
+            continue
+        func_node = _get_func_node(test_tree, test_name)
+        if func_node is None:
+            assertions_by_test[(test_name, rel_path)] = []
+            continue
+        try:
+            assertions = collect_assertions(func_node, rel_path)
+        except RecursionError:
+            print(
+                f"snake-eyes: test_mapping skipping assertions in"
+                f" {rel_path}/{test_name}: depth budget exceeded",
+                file=sys.stderr,
+            )
+            assertions = []
+        except BROADENED_EXCEPTIONS as exc:
+            print(
+                f"snake-eyes: test_mapping skipping assertions in"
+                f" {rel_path}/{test_name}: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            assertions = []
+        assertions_by_test[(test_name, rel_path)] = assertions
 
+        provenance_context, provenance_ready = _collect_provenance(
+            test_tree, rel_path, test_name, func_node, resolver
+        )
+        contexts_by_test[(test_name, rel_path)] = (
+            func_node,
+            provenance_context,
+            provenance_ready,
+        )
+
+    # 5. Compute assertion-detection confidence (integer, round half up).
+    total = len(assertions_by_test)
+    detected = sum(1 for assertions in assertions_by_test.values() if assertions)
+    if total > 0:
+        confidence = (100 * detected + total // 2) // total
+    else:
+        confidence = 0
+
+    # 6. Pair tests to production functions.
+    # The graph node set includes BOTH source AND test files so that test-file
+    # nodes have outgoing edges for transitive BFS (strategy 3).  Target
+    # candidacy is still restricted to source-only `target_records` above.
+    # With no production targets, every pairing strategy is a no-op, so skip
+    # the (expensive) astroid call-graph build entirely.
+    if target_records:
+        graph_files = list(discovered.source_files) + list(discovered.test_files)
+        pairs = pair_tests(
+            test_functions=test_functions,
+            target_records=target_records,
+            test_trees=test_trees,
+            root_abs=str(root),
+            graph_files=graph_files,
+        )
+    else:
+        pairs = []
+
+    # 7. Build target-identity and import-package indexes for provenance.
+    #    Built lazily: only when there are pairs to map (matching the
+    #    container-mutation pipeline, which returned early on no pairs).
     target_records_by_identity: dict[tuple[str, str], FunctionRecord] = {}
     target_identity_counts: dict[tuple[str, str], int] = {}
-    for record in target_records:
-        identity = (record.package, record.name)
-        target_records_by_identity.setdefault(identity, record)
-        target_identity_counts[identity] = target_identity_counts.get(identity, 0) + 1
-    resolver = ProvenanceResolver(root)
     packages_by_file: dict[str, frozenset[str]] = {}
-    for record in target_records:
-        if record.file not in packages_by_file:
-            try:
-                packages_by_file[record.file] = resolver.target_packages(record.file)
-            except BROADENED_EXCEPTIONS as exc:
-                print(
-                    f"snake-eyes: test_mapping disabling target provenance for"
-                    f" {record.file}: {type(exc).__name__}: {exc}",
-                    file=sys.stderr,
-                )
-                packages_by_file[record.file] = frozenset()
-    target_import_packages = {
-        (record.file, record.name): packages_by_file[record.file]
-        for record in target_records
-    }
+    target_import_packages: dict[tuple[str, str], frozenset[str]] = {}
+    if pairs:
+        for record in target_records:
+            identity = (record.package, record.name)
+            target_records_by_identity.setdefault(identity, record)
+            target_identity_counts[identity] = (
+                target_identity_counts.get(identity, 0) + 1
+            )
+        for record in target_records:
+            if record.file not in packages_by_file:
+                try:
+                    packages_by_file[record.file] = resolver.target_packages(
+                        record.file
+                    )
+                except BROADENED_EXCEPTIONS as exc:
+                    print(
+                        f"snake-eyes: test_mapping disabling target provenance for"
+                        f" {record.file}: {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
+                    packages_by_file[record.file] = frozenset()
+        target_import_packages = {
+            (record.file, record.name): packages_by_file[record.file]
+            for record in target_records
+        }
 
-    assertion_cache: dict[
-        tuple[str, str],
-        tuple[
-            ast.FunctionDef | ast.AsyncFunctionDef,
-            list[AssertionInfo],
-            Any,
-            bool,
-        ],
-    ] = {}
+    # 8. Build mapping rows from pre-collected assertions.
     rows: list[dict[str, Any]] = []
 
     for pair in pairs:
-        pair_tree = test_trees.get(pair.test_file)
-        if pair_tree is None:
+        assertions = assertions_by_test.get((pair.test_function, pair.test_file), [])
+        context = contexts_by_test.get((pair.test_function, pair.test_file))
+        if context is None:
             continue
-        cache_key = (pair.test_file, pair.test_function)
-        cached = assertion_cache.get(cache_key)
-        if cached is None:
-            collected = _collect_assertion_context(
-                pair_tree,
-                pair.test_file,
-                pair.test_function,
-                resolver,
-            )
-            if collected is None:
-                continue
-            cached = collected
-            assertion_cache[cache_key] = cached
-        func_node, assertions, provenance_context, provenance_ready = cached
+        func_node, provenance_context, provenance_ready = context
 
         target_import_package = target_import_packages[
             (pair.target_file, pair.target_function)
@@ -285,11 +339,13 @@ def run_test_mapping(
                         observes_container_state=observes_container_state,
                     ),
                     "confidence": pair.confidence,
+                    # Internal tiebreaker fields (stripped before return)
                     "_line": assertion.line,
                     "_col": assertion.col,
                 }
             )
 
+    # 9. Sort by composite key (numeric line, col for tiebreaking).
     rows.sort(
         key=lambda row: (
             row["test_file"],
@@ -300,7 +356,9 @@ def run_test_mapping(
             row["target_function"],
         )
     )
-    return [
+
+    # 10. Strip internal tiebreaker fields.
+    mappings = [
         {
             "test_function": row["test_function"],
             "test_file": row["test_file"],
@@ -313,3 +371,8 @@ def run_test_mapping(
         }
         for row in rows
     ]
+
+    return TestMappingResult(
+        mappings=mappings,
+        assertion_detection_confidence=confidence,
+    )
