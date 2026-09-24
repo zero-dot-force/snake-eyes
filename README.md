@@ -29,14 +29,35 @@ implementation (no radon dependency).
 
 ## Installation
 
-From a clone (not published to PyPI):
+Requires Python 3.11+.
+
+### From PyPI
+
+```bash
+uv tool install snake-eyes-analyzer
+```
+
+pipx and pip are also supported:
+
+```bash
+pipx install snake-eyes-analyzer
+# or
+pip install snake-eyes-analyzer
+```
+
+### From a clone (local development)
 
 ```bash
 uv sync
 uv run snake-eyes --stdio
 ```
 
-Requires Python 3.11+.
+The package installs two console entry points that both launch the
+JSON-RPC analyzer over stdin/stdout:
+
+- `snake-eyes` — the primary entry point.
+- `gaze-analyzer-python` — an alias that Gaze's tier-3 PATH
+  auto-discovery looks for; either name works in `.gaze.yaml`.
 
 ## Configuration
 
@@ -48,6 +69,10 @@ analyzers:
     command: snake-eyes
     args: ["--stdio"]
 ```
+
+`command` may be either `snake-eyes` or the `gaze-analyzer-python`
+alias; Gaze's tier-3 PATH auto-discovery looks for
+`gaze-analyzer-python` when `command` is not set explicitly.
 
 ## Project structure
 

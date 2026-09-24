@@ -1,0 +1,93 @@
+# This workflow publishes snake-eyes to PyPI on manual dispatch.
+# It runs the org-infra release preflight (semver validation, CI
+# check-run verification, and annotated tag creation), then builds
+# the sdist and wheel, publishes them to PyPI via trusted publishing
+# (OIDC), generates an SPDX SBOM, and attaches all artifacts to a
+# GitHub Release. Trusted publishing (task 4.3) and the protected
+# `release` environment (task 4.2) must be configured org-side before
+# the first dispatch.
+
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+        type: string
+      skip_semver_check:
+        description: 'Skip semver ordering validation'
+        required: false
+        type: boolean
+        default: false
+      skip_ci_checks:
+        description: 'Skip CI check-run verification'
+        required: false
+        type: boolean
+        default: false
+      skip_unreleased_check:
+        description: 'Skip unreleased-commit check'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Preflight
+    uses: complytime/org-infra/.github/workflows/reusable_release_preflight.yml@0c784711926c9864f027ec565fd7c06a382d80f8 # v0.7.1
+    with:
+      tag: ${{ inputs.tag }}
+      ci_checks: '["test (3.11)", "test (3.12)"]'
+      skip_semver_check: ${{ inputs.skip_semver_check }}
+      skip_ci_checks: ${{ inputs.skip_ci_checks }}
+      skip_unreleased_check: ${{ inputs.skip_unreleased_check }}
+      allow_prerelease: true
+    permissions:
+      contents: write
+      checks: read
+
+  publish:
+    name: Publish to PyPI
+    needs: preflight
+    if: needs.preflight.outputs.tag != ''
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://pypi.org/p/snake-eyes-analyzer
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: dist
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          files: |
+            dist/*
+            sbom.spdx.json

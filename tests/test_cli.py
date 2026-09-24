@@ -83,16 +83,17 @@ def test_version_is_single_sourced() -> None:
     project = data["project"]
     assert "version" in project["dynamic"]
     assert data["tool"]["hatch"]["version"]["path"] == "src/snake_eyes/__init__.py"
-    assert importlib.metadata.version("snake-eyes") == __version__
+    assert importlib.metadata.version("snake-eyes-analyzer") == __version__
 
 
 def test_package_metadata() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
     project = data["project"]
-    assert project["name"] == "snake-eyes"
+    assert project["name"] == "snake-eyes-analyzer"
     assert project["requires-python"] == ">=3.11"
     assert project["license"] == "Apache-2.0"
     assert project["scripts"]["snake-eyes"] == "snake_eyes.__main__:main"
+    assert project["scripts"]["gaze-analyzer-python"] == "snake_eyes.__main__:main"
 
 
 def test_notice_exact_text() -> None:
