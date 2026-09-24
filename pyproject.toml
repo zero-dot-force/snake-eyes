@@ -1,5 +1,5 @@
 [project]
-name = "snake-eyes"
+name = "snake-eyes-analyzer"
 dynamic = ["version"]
 description = "Python side-effect analyzer backend for Gaze (JSON-RPC 2.0 external analyzer protocol)"
 readme = "README.md"
@@ -9,6 +9,7 @@ dependencies = ["astroid>=3.0,<4", "coverage>=7.0,<8"]
 
 [project.scripts]
 snake-eyes = "snake_eyes.__main__:main"
+gaze-analyzer-python = "snake_eyes.__main__:main"
 
 [dependency-groups]
 dev = [

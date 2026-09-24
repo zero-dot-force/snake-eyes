@@ -493,7 +493,7 @@ wheels = [
 ]
 
 [[package]]
-name = "snake-eyes"
+name = "snake-eyes-analyzer"
 source = { editable = "." }
 dependencies = [
     { name = "astroid" },
