@@ -1,0 +1,139 @@
+{
+  "compute_complexity": {
+    "paired_tests": 27,
+    "max_contract_coverage_pct": 28.571428571428573,
+    "target_ids": {
+      "se-2ede1f21": {
+        "covered_by": [
+          "test_ordering_by_file_line_name"
+        ],
+        "gap_in": [
+          "test_bounded_visitor_depth_exceeded",
+          "test_branchy_complexity",
+          "test_byte_identical_determinism",
+          "test_complexity_async_for",
+          "test_complexity_async_function",
+          "test_complexity_async_nested",
+          "test_complexity_async_with",
+          "test_complexity_boolop",
+          "test_complexity_broadened_exceptions_traversal",
+          "test_complexity_class_method",
+          "test_complexity_comprehension",
+          "test_complexity_depth_exceeded_in_visitor",
+          "test_complexity_except_handler",
+          "test_complexity_for_loop",
+          "test_complexity_ifexp",
+          "test_complexity_many_functions",
+          "test_complexity_match_case",
+          "test_complexity_visitor_recursion_error_skips_file",
+          "test_complexity_while_loop",
+          "test_complexity_with_statement",
+          "test_detector_complexity_function_set_match",
+          "test_lambda_excluded",
+          "test_missing_root_raises",
+          "test_nested_function_entries",
+          "test_package_derivation",
+          "test_syntax_error_skipped_no_crash"
+        ]
+      },
+      "se-65715d40": {
+        "covered_by": [],
+        "gap_in": [
+          "test_bounded_visitor_depth_exceeded",
+          "test_branchy_complexity",
+          "test_byte_identical_determinism",
+          "test_complexity_async_for",
+          "test_complexity_async_function",
+          "test_complexity_async_nested",
+          "test_complexity_async_with",
+          "test_complexity_boolop",
+          "test_complexity_broadened_exceptions_traversal",
+          "test_complexity_class_method",
+          "test_complexity_comprehension",
+          "test_complexity_depth_exceeded_in_visitor",
+          "test_complexity_except_handler",
+          "test_complexity_for_loop",
+          "test_complexity_ifexp",
+          "test_complexity_many_functions",
+          "test_complexity_match_case",
+          "test_complexity_visitor_recursion_error_skips_file",
+          "test_complexity_while_loop",
+          "test_complexity_with_statement",
+          "test_detector_complexity_function_set_match",
+          "test_lambda_excluded",
+          "test_missing_root_raises",
+          "test_nested_function_entries",
+          "test_ordering_by_file_line_name",
+          "test_package_derivation",
+          "test_syntax_error_skipped_no_crash"
+        ]
+      }
+    }
+  },
+  "parse_coverage": {
+    "paired_tests": 36,
+    "max_contract_coverage_pct": 50,
+    "target_ids": {
+      "se-48443a2b": {
+        "covered_by": [
+          "test_coverage_uses_function_field",
+          "test_ordering_by_file_start_line_function",
+          "test_traversal_keys_ignored"
+        ],
+        "gap_in": [
+          "test_coverage_async_function",
+          "test_coverage_dot_coverage_analysis2_error",
+          "test_coverage_dot_coverage_ignores_coveragerc_omit",
+          "test_coverage_dot_coverage_memory_error_degrades",
+          "test_coverage_dot_coverage_non_regular",
+          "test_coverage_dot_coverage_size_cap",
+          "test_coverage_dot_coverage_stat_error",
+          "test_coverage_json_expected_values",
+          "test_coverage_json_files_not_in_discovered",
+          "test_coverage_json_non_dict_files_returns_empty",
+          "test_coverage_json_non_int_executed_lines_degrades",
+          "test_coverage_json_non_list_executed_lines",
+          "test_coverage_json_recursion_error_degrades",
+          "test_coverage_json_symlink_rejected",
+          "test_coverage_json_wins_over_dot_coverage",
+          "test_coverage_parse_source_spans_non_regular",
+          "test_coverage_parse_source_spans_parse_error",
+          "test_coverage_parse_source_spans_size_cap",
+          "test_coverage_parse_source_spans_stat_error",
+          "test_dot_coverage_only_non_100",
+          "test_dot_coverage_spans_none_skips",
+          "test_malformed_coverage_json_returns_empty",
+          "test_missing_coverage_files_returns_empty",
+          "test_nonexistent_root_raises",
+          "test_ordering_non_trivial_sort_key",
+          "test_parse_coverage_confine_path_absolute",
+          "test_parse_coverage_dot_coverage_malformed",
+          "test_parse_coverage_missing_executed_lines",
+          "test_parse_coverage_wrong_shape_file_data",
+          "test_result_is_bare_list_not_wrapped",
+          "test_syntax_error_file_skipped",
+          "test_wrong_shape_coverage_json_returns_empty",
+          "test_zero_total_stmts"
+        ]
+      }
+    }
+  },
+  "function_record_to_dict": {
+    "paired_tests": 6,
+    "max_contract_coverage_pct": 20,
+    "target_ids": {
+      "se-21520092": {
+        "covered_by": [
+          "test_empty_side_effects_serialize_as_empty_list",
+          "test_function_record_to_dict_includes_optionals_when_set"
+        ],
+        "gap_in": [
+          "test_effect_is_frozen",
+          "test_function_record_is_frozen",
+          "test_function_record_to_dict_omits_none_optionals",
+          "test_type_field_is_canonical_string"
+        ]
+      }
+    }
+  }
+}
