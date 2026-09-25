@@ -7,6 +7,7 @@ description: >
   or /opsx-apply.
 ---
 <!-- scaffolded by gaze dev -->
+<!-- scaffolded by gaze v1.8.0 -->
 
 <protect>
 # Command: /gaze fix
