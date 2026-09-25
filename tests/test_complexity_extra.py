@@ -16,6 +16,7 @@ def test_complexity_async_function(tmp_path: Path) -> None:
     code = "async def fetch(url):\n    return url\n"
     (tmp_path / "async_mod.py").write_text(code)
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     names = [e["name"] for e in entries]
     assert "fetch" in names
     fetch_entry = next(e for e in entries if e["name"] == "fetch")
@@ -32,6 +33,7 @@ def test_complexity_async_nested(tmp_path: Path) -> None:
     )
     (tmp_path / "async_nested.py").write_text(code)
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 2
     names = [e["name"] for e in entries]
     assert "outer" in names
     assert "inner" in names
@@ -42,6 +44,7 @@ def test_complexity_async_with(tmp_path: Path) -> None:
     code = "async def f():\n    async with open('x') as fp:\n        pass\n"
     (tmp_path / "async_with.py").write_text(code)
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     entry = next(e for e in entries if e["name"] == "f")
     assert entry["complexity"] >= 2  # base 1 + async with
 
@@ -51,6 +54,7 @@ def test_complexity_async_for(tmp_path: Path) -> None:
     code = "async def f(items):\n    async for x in items:\n        pass\n"
     (tmp_path / "async_for.py").write_text(code)
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     entry = next(e for e in entries if e["name"] == "f")
     assert entry["complexity"] >= 2  # base 1 + async for
 
@@ -74,6 +78,7 @@ def test_complexity_depth_exceeded_in_visitor(tmp_path: Path) -> None:
 
     # Should not raise — skip-and-continue
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     names = [e["name"] for e in entries]
     # ok() must still appear
     assert "ok" in names
@@ -84,6 +89,7 @@ def test_complexity_many_functions(tmp_path: Path) -> None:
     lines = [f"def func_{i}(): pass" for i in range(20)]
     (tmp_path / "many.py").write_text("\n".join(lines) + "\n")
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 20
     names = {e["name"] for e in entries}
     for i in range(20):
         assert f"func_{i}" in names
@@ -100,6 +106,7 @@ def test_complexity_class_method(tmp_path: Path) -> None:
     )
     (tmp_path / "cls.py").write_text(code)
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     names = [e["name"] for e in entries]
     assert "method" in names
     entry = next(e for e in entries if e["name"] == "method")
@@ -164,6 +171,7 @@ def test_complexity_visitor_recursion_error_skips_file(tmp_path: Path) -> None:
 
     # deep.py is skipped due to RecursionError; good.py must still appear
     names = [e["name"] for e in entries]
+    assert len(entries) == 1
     assert "ok" in names, (
         "good.py must still be processed after the RecursionError skip"
     )

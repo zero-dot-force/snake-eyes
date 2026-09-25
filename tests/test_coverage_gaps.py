@@ -32,6 +32,7 @@ def test_complexity_comprehension(tmp_path: Path) -> None:
     code = "def f(lst):\n    return [x for x in lst if x > 0]\n"
     (tmp_path / "comp.py").write_text(code)
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     entry = next(e for e in entries if e["name"] == "f")
     assert entry["complexity"] >= 2  # base 1 + comprehension + if
 
@@ -41,6 +42,7 @@ def test_complexity_while_loop(tmp_path: Path) -> None:
     code = "def f(n):\n    while n > 0:\n        n -= 1\n"
     (tmp_path / "while.py").write_text(code)
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     entry = next(e for e in entries if e["name"] == "f")
     assert entry["complexity"] >= 2  # base 1 + while
 
@@ -50,6 +52,7 @@ def test_complexity_for_loop(tmp_path: Path) -> None:
     code = "def f(lst):\n    for x in lst:\n        pass\n"
     (tmp_path / "forloop.py").write_text(code)
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     entry = next(e for e in entries if e["name"] == "f")
     assert entry["complexity"] >= 2  # base 1 + for
 
@@ -59,6 +62,7 @@ def test_complexity_except_handler(tmp_path: Path) -> None:
     code = "def f():\n    try:\n        pass\n    except Exception:\n        pass\n"
     (tmp_path / "exc.py").write_text(code)
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     entry = next(e for e in entries if e["name"] == "f")
     assert entry["complexity"] >= 2  # base 1 + except
 
@@ -87,6 +91,7 @@ def test_complexity_broadened_exceptions_traversal(tmp_path: Path) -> None:
     (tmp_path / "good.py").write_text("def ok(): return 1\n")
 
     entries = compute_complexity(str(tmp_path), None)
+    assert len(entries) == 1
     # good.py must still be processed
     names = [e["name"] for e in entries]
     assert "ok" in names
@@ -624,6 +629,7 @@ def test_coverage_async_function(tmp_path: Path) -> None:
     (tmp_path / "coverage.json").write_text(json.dumps(cov_json))
 
     result = parse_coverage(str(tmp_path), None)
+    assert len(result) == 1
 
     entries = [e for e in result if e["function"] == "fetch"]
     assert entries, "async def fetch not found in coverage results"
@@ -728,10 +734,10 @@ def test_ordering_non_trivial_sort_key(tmp_path: Path) -> None:
 
     result = parse_coverage(str(tmp_path), None)
 
-    names = [e["function"] for e in result if e["file"] == "ordering_test.py"]
-    assert names == ["zz_first", "aa_second"], (
-        f"Expected [zz_first, aa_second] by start_line order, got {names}"
-    )
+    assert [e["function"] for e in result if e["file"] == "ordering_test.py"] == [
+        "zz_first",
+        "aa_second",
+    ]
 
 
 # ---------------------------------------------------------------------------

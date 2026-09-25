@@ -65,6 +65,7 @@ def test_extract_signals_not_deduplicated(tmp_path: Path) -> None:
     signals = extract_signals(str(tmp_path), None)
     keys = [(s["function"], s["side_effect_type"], s["source"]) for s in signals]
     assert keys.count(("pick", "ReturnValue", "visibility")) == 2
+    assert len([s for s in signals if s["source"] == "visibility"]) == 2
 
 
 def test_extract_signals_orders_returned_projection(tmp_path: Path) -> None:
@@ -122,8 +123,7 @@ def test_extract_signals_covers_all_sources(tmp_path: Path) -> None:
         "    return get_record(2)\n"
     )
     signals = extract_signals(str(tmp_path), None)
-    sources = {s["source"] for s in signals}
-    assert sources == _ALLOWED_SOURCES
+    assert {s["source"] for s in signals} == _ALLOWED_SOURCES
 
 
 def test_extract_signals_handles_metaclass_annassign_and_nested(
