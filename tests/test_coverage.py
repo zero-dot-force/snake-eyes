@@ -65,6 +65,14 @@ def test_coverage_json_expected_values(tmp_path: Path) -> None:
 
     result = parse_coverage(str(tmp_path), None)
 
+    # Ordering covers .sort() at coverage.py:359
+    assert [
+        (entry["file"], entry["start_line"], entry["function"]) for entry in result
+    ] == [
+        ("tests/fixtures/coverage/sample_module.py", 4, "covered_func"),
+        ("tests/fixtures/coverage/sample_module.py", 8, "uncovered_func"),
+    ]
+
     assert result, "parse_coverage returned empty list"
     covered_func_entries = [e for e in result if e["function"] == "covered_func"]
     assert covered_func_entries, "covered_func not in results"

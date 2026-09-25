@@ -111,6 +111,10 @@ def test_ordering_by_file_line_name(tmp_path: Path) -> None:
 
     entries = compute_complexity(str(tmp_path), None)
 
+    # Length covers .extend() at complexity.py:159
+    assert len(entries) == 3
+
+    # Ordering covers .sort() at complexity.py:161
     assert [
         (entry["file"], entry["line"], entry["name"], entry["complexity"])
         for entry in entries
