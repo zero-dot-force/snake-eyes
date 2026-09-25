@@ -16,6 +16,7 @@ def test_function_record_to_dict_omits_none_optionals() -> None:
         name="f", package="pkg.mod", file="pkg/mod.py", line=3, side_effects=(effect,)
     )
     result = function_record_to_dict(record)
+    assert len(result["side_effects"]) == 1
     assert result == {
         "name": "f",
         "package": "pkg.mod",
