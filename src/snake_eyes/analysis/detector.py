@@ -654,42 +654,88 @@ class _EffectVisitor(ast.NodeVisitor):
         self._handle_call(node)
         self.generic_visit(node)
 
-    def _handle_call(self, node: ast.Call) -> None:  # noqa: C901 (complex)
-        fn = node.func
+    _CALL_HANDLERS: tuple[str, ...] = (
+        "_handle_exit_calls",
+        "_handle_print_call",
+        "_handle_dynamic_exec",
+        "_handle_reflection_calls",
+        "_handle_metaprogramming",
+        "_handle_import_effects",
+        "_handle_finalizers",
+        "_handle_time_dependency",
+        "_handle_logging",
+        "_handle_concurrency",
+        "_handle_method_calls",
+        "_handle_open_write",
+        "_handle_computed_getattr_call",
+        "_handle_name_call_fallback",
+    )
 
-        # sys.exit(...)
+    _METHOD_CALL_HANDLERS: tuple[str, ...] = (
+        "_handle_std_streams",
+        "_handle_env_mutations",
+        "_handle_os_filesystem",
+        "_handle_shutil_and_path",
+        "_handle_thread_spawn",
+        "_handle_mutex_op",
+        "_handle_channel_send",
+        "_handle_task_cancel",
+        "_handle_barrier_wait",
+        "_handle_db_methods",
+        "_handle_http_response",
+        "_handle_writer_methods",
+        "_handle_container_methods",
+        "_handle_map_methods",
+    )
+
+    @staticmethod
+    def _method_parts(fn: ast.Attribute) -> tuple[ast.expr, str, str | None]:
+        obj = fn.value
+        method = fn.attr
+        obj_name = obj.id if isinstance(obj, ast.Name) else None
+        return obj, method, obj_name
+
+    def _handle_call(self, node: ast.Call) -> None:
+        fn = node.func
+        for name in self._CALL_HANDLERS:
+            if getattr(self, name)(node, fn):
+                return
+
+    # -- exit -----------------------------------------------------------------
+    def _handle_exit_calls(self, node: ast.Call, fn: ast.expr) -> bool:
         if _is_sys_exit(node):
             self._add(SideEffectType.ProcessExit, "Process exit via sys.exit", node)
             self._add(SideEffectType.ErrorSignal, "Exception signal via sys.exit", node)
-            return
-
-        # os._exit(...)
+            return True
         if _is_os_exit(node):
             self._add(SideEffectType.ProcessExit, "Process exit via os._exit", node)
             self._add(SideEffectType.ErrorSignal, "Exception signal via os._exit", node)
-            return
+            return True
+        return False
 
-        # print(...)
-        if isinstance(fn, ast.Name) and fn.id == "print":
-            # print(file=sys.stderr) → StderrWrite
-            for kw in node.keywords:
-                if kw.arg == "file" and isinstance(kw.value, ast.Attribute):
-                    attr = kw.value
-                    if (
-                        isinstance(attr.value, ast.Name)
-                        and attr.value.id == "sys"
-                        and attr.attr == "stderr"
-                    ):
-                        self._add(
-                            SideEffectType.StderrWrite,
-                            "Writes to stderr via print",
-                            node,
-                        )
-                        return
-            self._add(SideEffectType.StdoutWrite, "Writes to stdout via print", node)
-            return
+    # -- print ----------------------------------------------------------------
+    def _handle_print_call(self, node: ast.Call, fn: ast.expr) -> bool:
+        if not isinstance(fn, ast.Name) or fn.id != "print":
+            return False
+        for kw in node.keywords:
+            if kw.arg == "file" and isinstance(kw.value, ast.Attribute):
+                attr = kw.value
+                if (
+                    isinstance(attr.value, ast.Name)
+                    and attr.value.id == "sys"
+                    and attr.attr == "stderr"
+                ):
+                    self._add(
+                        SideEffectType.StderrWrite,
+                        "Writes to stderr via print",
+                        node,
+                    )
+                    return True
+        self._add(SideEffectType.StdoutWrite, "Writes to stdout via print", node)
+        return True
 
-        # eval(...) / exec(...)
+    # -- eval / exec ----------------------------------------------------------
+    def _handle_dynamic_exec(self, node: ast.Call, fn: ast.expr) -> bool:
         if isinstance(fn, ast.Name) and fn.id in ("eval", "exec"):
             self._add(
                 SideEffectType.CallbackInvocation,
@@ -697,11 +743,12 @@ class _EffectVisitor(ast.NodeVisitor):
                 node,
                 detail={"confidence": "ambiguous"},
             )
-            return
+            return True
+        return False
 
-        # setattr(...)
+    # -- setattr / delattr ----------------------------------------------------
+    def _handle_reflection_calls(self, node: ast.Call, fn: ast.expr) -> bool:
         if isinstance(fn, ast.Name) and fn.id == "setattr":
-            # setattr(module_alias, ...) → MonkeyPatch; else → ReflectionMutation
             if (
                 len(node.args) >= 2
                 and isinstance(node.args[0], ast.Name)
@@ -719,27 +766,25 @@ class _EffectVisitor(ast.NodeVisitor):
                     "Mutates object attribute via setattr",
                     node,
                 )
-            return
-
-        # delattr(...)
+            return True
         if isinstance(fn, ast.Name) and fn.id == "delattr":
             self._add(
                 SideEffectType.ReflectionMutation,
                 "Deletes object attribute via delattr",
                 node,
             )
-            return
+            return True
+        return False
 
-        # type("T", bases, dict) → MetaprogrammingMutation
+    # -- metaprogramming ------------------------------------------------------
+    def _handle_metaprogramming(self, node: ast.Call, fn: ast.expr) -> bool:
         if isinstance(fn, ast.Name) and fn.id == "type" and len(node.args) == 3:
             self._add(
                 SideEffectType.MetaprogrammingMutation,
                 "Dynamic class creation via type()",
                 node,
             )
-            return
-
-        # types.new_class(...)
+            return True
         if (
             isinstance(fn, ast.Attribute)
             and fn.attr == "new_class"
@@ -751,18 +796,18 @@ class _EffectVisitor(ast.NodeVisitor):
                 "Dynamic class creation via types.new_class",
                 node,
             )
-            return
+            return True
+        return False
 
-        # __import__(...)
+    # -- dynamic imports ------------------------------------------------------
+    def _handle_import_effects(self, node: ast.Call, fn: ast.expr) -> bool:
         if isinstance(fn, ast.Name) and fn.id == "__import__":
             self._add(
                 SideEffectType.ImportSideEffect,
                 "Dynamic import via __import__",
                 node,
             )
-            return
-
-        # importlib.import_module(...)
+            return True
         if (
             isinstance(fn, ast.Attribute)
             and fn.attr == "import_module"
@@ -774,9 +819,11 @@ class _EffectVisitor(ast.NodeVisitor):
                 "Dynamic import via importlib.import_module",
                 node,
             )
-            return
+            return True
+        return False
 
-        # atexit.register(...)
+    # -- finalizers -----------------------------------------------------------
+    def _handle_finalizers(self, node: ast.Call, fn: ast.expr) -> bool:
         if (
             isinstance(fn, ast.Attribute)
             and fn.attr == "register"
@@ -788,9 +835,7 @@ class _EffectVisitor(ast.NodeVisitor):
                 "Finalizer registered via atexit.register",
                 node,
             )
-            return
-
-        # weakref.finalize(...)
+            return True
         if (
             isinstance(fn, ast.Attribute)
             and fn.attr == "finalize"
@@ -802,73 +847,75 @@ class _EffectVisitor(ast.NodeVisitor):
                 "Finalizer registered via weakref.finalize",
                 node,
             )
-            return
+            return True
+        return False
 
-        # time.time() / time.sleep() / datetime.now() / date.today()
-        if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
-            obj_name = fn.value.id
-            method_name = fn.attr
-            if obj_name == "time" and method_name in (
-                "time",
-                "sleep",
-                "monotonic",
-                "perf_counter",
-            ):
-                self._add(
-                    SideEffectType.TimeDependency,
-                    f"Time dependency via {obj_name}.{method_name}",
-                    node,
-                )
-                return
-            if obj_name == "datetime" and method_name in ("now", "utcnow", "today"):
-                self._add(
-                    SideEffectType.TimeDependency,
-                    f"Time dependency via {obj_name}.{method_name}",
-                    node,
-                )
-                return
-            if obj_name == "date" and method_name == "today":
-                self._add(
-                    SideEffectType.TimeDependency,
-                    "Time dependency via date.today",
-                    node,
-                )
-                return
+    # -- time / datetime / date ----------------------------------------------
+    def _handle_time_dependency(self, node: ast.Call, fn: ast.expr) -> bool:
+        if not isinstance(fn, ast.Attribute) or not isinstance(fn.value, ast.Name):
+            return False
+        obj_name = fn.value.id
+        method_name = fn.attr
+        if obj_name == "time" and method_name in (
+            "time",
+            "sleep",
+            "monotonic",
+            "perf_counter",
+        ):
+            self._add(
+                SideEffectType.TimeDependency,
+                f"Time dependency via {obj_name}.{method_name}",
+                node,
+            )
+            return True
+        if obj_name == "datetime" and method_name in ("now", "utcnow", "today"):
+            self._add(
+                SideEffectType.TimeDependency,
+                f"Time dependency via {obj_name}.{method_name}",
+                node,
+            )
+            return True
+        if obj_name == "date" and method_name == "today":
+            self._add(
+                SideEffectType.TimeDependency,
+                "Time dependency via date.today",
+                node,
+            )
+            return True
+        return False
 
-        # logging.xxx(...)
-        if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
-            obj_name = fn.value.id
-            method_name = fn.attr
-            if obj_name == "logging" and method_name in _LOG_METHODS:
-                self._add(
-                    SideEffectType.LogWrite,
-                    f"Log write via logging.{method_name}",
-                    node,
-                )
-                return
-            if obj_name in ("logger", "log") and method_name in _LOG_METHODS:
-                self._add(
-                    SideEffectType.LogWrite,
-                    f"Log write via {obj_name}.{method_name}",
-                    node,
-                )
-                return
+    # -- logging --------------------------------------------------------------
+    def _handle_logging(self, node: ast.Call, fn: ast.expr) -> bool:
+        if not isinstance(fn, ast.Attribute) or not isinstance(fn.value, ast.Name):
+            return False
+        obj_name = fn.value.id
+        method_name = fn.attr
+        if obj_name == "logging" and method_name in _LOG_METHODS:
+            self._add(
+                SideEffectType.LogWrite,
+                f"Log write via logging.{method_name}",
+                node,
+            )
+            return True
+        if obj_name in ("logger", "log") and method_name in _LOG_METHODS:
+            self._add(
+                SideEffectType.LogWrite,
+                f"Log write via {obj_name}.{method_name}",
+                node,
+            )
+            return True
+        return False
 
-        # asyncio.gather(...)
+    # -- asyncio / thread / pool spawn ----------------------------------------
+    def _handle_concurrency(self, node: ast.Call, fn: ast.expr) -> bool:
         if (
             isinstance(fn, ast.Attribute)
             and fn.attr == "gather"
             and isinstance(fn.value, ast.Name)
             and fn.value.id == "asyncio"
         ):
-            self._add(
-                SideEffectType.WaitGroupOp,
-                "Wait group via asyncio.gather",
-                node,
-            )
-            return
-
-        # asyncio.create_task(...)
+            self._add(SideEffectType.WaitGroupOp, "Wait group via asyncio.gather", node)
+            return True
         if (
             isinstance(fn, ast.Attribute)
             and fn.attr == "create_task"
@@ -880,18 +927,14 @@ class _EffectVisitor(ast.NodeVisitor):
                 "Async task spawn via asyncio.create_task",
                 node,
             )
-            return
-
-        # loop.run_in_executor(...)
+            return True
         if isinstance(fn, ast.Attribute) and fn.attr == "run_in_executor":
             self._add(
                 SideEffectType.GoroutineSpawn,
                 "Task spawn via loop.run_in_executor",
                 node,
             )
-            return
-
-        # multiprocessing.Pool(...)
+            return True
         if (
             isinstance(fn, ast.Attribute)
             and fn.attr == "Pool"
@@ -903,316 +946,317 @@ class _EffectVisitor(ast.NodeVisitor):
                 "Process pool via multiprocessing.Pool",
                 node,
             )
-            return
+            return True
+        return False
 
-        # Method calls on objects
-        if isinstance(fn, ast.Attribute):
-            obj = fn.value
-            method = fn.attr
-            obj_name_str: str | None = None
-            if isinstance(obj, ast.Name):
-                obj_name_str = obj.id
+    # -- method calls ---------------------------------------------------------
+    def _handle_method_calls(self, node: ast.Call, fn: ast.expr) -> bool:
+        if not isinstance(fn, ast.Attribute):
+            return False
+        for name in self._METHOD_CALL_HANDLERS:
+            if getattr(self, name)(node, fn):
+                return True
+        return False
 
-            # sys.stdout.write / sys.stderr.write
-            if isinstance(obj, ast.Attribute) and isinstance(obj.value, ast.Name):
-                if obj.value.id == "sys":
-                    if obj.attr == "stdout" and method == "write":
-                        self._add(
-                            SideEffectType.StdoutWrite,
-                            "Writes to stdout via sys.stdout.write",
-                            node,
-                        )
-                        return
-                    if obj.attr == "stderr" and method == "write":
-                        self._add(
-                            SideEffectType.StderrWrite,
-                            "Writes to stderr via sys.stderr.write",
-                            node,
-                        )
-                        return
-
-            # os.environ mutations
-            if isinstance(obj, ast.Attribute):
-                inner = obj.value
-                if (
-                    isinstance(inner, ast.Name)
-                    and inner.id == "os"
-                    and obj.attr == "environ"
-                    and method in ("update", "__setitem__")
-                ):
+    def _handle_std_streams(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        obj, method, _ = self._method_parts(fn)
+        if isinstance(obj, ast.Attribute) and isinstance(obj.value, ast.Name):
+            if obj.value.id == "sys":
+                if obj.attr == "stdout" and method == "write":
                     self._add(
-                        SideEffectType.EnvVarMutation,
-                        "Mutates environment variable",
+                        SideEffectType.StdoutWrite,
+                        "Writes to stdout via sys.stdout.write",
                         node,
                     )
-                    return
-            if obj_name_str == "os" and method == "putenv":
-                self._add(
-                    SideEffectType.EnvVarMutation,
-                    "Mutates environment variable via os.putenv",
-                    node,
-                )
-                return
-            if obj_name_str == "environ" and method in ("update", "__setitem__"):
+                    return True
+                if obj.attr == "stderr" and method == "write":
+                    self._add(
+                        SideEffectType.StderrWrite,
+                        "Writes to stderr via sys.stderr.write",
+                        node,
+                    )
+                    return True
+        return False
+
+    def _handle_env_mutations(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        obj, method, obj_name_str = self._method_parts(fn)
+        if isinstance(obj, ast.Attribute):
+            inner = obj.value
+            if (
+                isinstance(inner, ast.Name)
+                and inner.id == "os"
+                and obj.attr == "environ"
+                and method in ("update", "__setitem__")
+            ):
                 self._add(
                     SideEffectType.EnvVarMutation,
                     "Mutates environment variable",
                     node,
                 )
-                return
+                return True
+        if obj_name_str == "os" and method == "putenv":
+            self._add(
+                SideEffectType.EnvVarMutation,
+                "Mutates environment variable via os.putenv",
+                node,
+            )
+            return True
+        if obj_name_str == "environ" and method in ("update", "__setitem__"):
+            self._add(
+                SideEffectType.EnvVarMutation,
+                "Mutates environment variable",
+                node,
+            )
+            return True
+        return False
 
-            # os.remove / os.unlink / os.rmdir / os.chmod / ...
-            if obj_name_str == "os" and method in (
-                "remove",
-                "unlink",
-                "rmdir",
-            ):
-                self._add(
-                    SideEffectType.FileSystemDelete,
-                    f"Filesystem delete via os.{method}",
-                    node,
-                )
-                return
-            if obj_name_str == "os" and method in (
-                "chmod",
-                "chown",
-                "rename",
-                "mkdir",
-                "makedirs",
-                "symlink",
-                "link",
-            ):
-                self._add(
-                    SideEffectType.FileSystemMeta,
-                    f"Filesystem metadata via os.{method}",
-                    node,
-                )
-                return
-            if obj_name_str == "os" and method == "write":
+    def _handle_os_filesystem(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if obj_name_str == "os" and method in ("remove", "unlink", "rmdir"):
+            self._add(
+                SideEffectType.FileSystemDelete,
+                f"Filesystem delete via os.{method}",
+                node,
+            )
+            return True
+        if obj_name_str == "os" and method in (
+            "chmod",
+            "chown",
+            "rename",
+            "mkdir",
+            "makedirs",
+            "symlink",
+            "link",
+        ):
+            self._add(
+                SideEffectType.FileSystemMeta,
+                f"Filesystem metadata via os.{method}",
+                node,
+            )
+            return True
+        if obj_name_str == "os" and method == "write":
+            self._add(
+                SideEffectType.FileSystemWrite,
+                "Filesystem write via os.write",
+                node,
+            )
+            return True
+        return False
+
+    def _handle_shutil_and_path(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if obj_name_str == "shutil":
+            if method in ("copy", "copy2", "copyfile", "copytree", "move"):
                 self._add(
                     SideEffectType.FileSystemWrite,
-                    "Filesystem write via os.write",
+                    f"Filesystem write via shutil.{method}",
                     node,
                 )
-                return
+                return True
+            if method == "rmtree":
+                self._add(
+                    SideEffectType.FileSystemDelete,
+                    "Filesystem delete via shutil.rmtree",
+                    node,
+                )
+                return True
+        if method in ("write_text", "write_bytes"):
+            self._add(
+                SideEffectType.FileSystemWrite,
+                f"Filesystem write via Path.{method}",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        if method == "unlink":
+            self._add(
+                SideEffectType.FileSystemDelete,
+                "Filesystem delete via Path.unlink",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        if method in ("mkdir", "rename", "chmod"):
+            self._add(
+                SideEffectType.FileSystemMeta,
+                f"Filesystem metadata via Path.{method}",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        return False
 
-            # shutil.copy* / shutil.rmtree
-            if obj_name_str == "shutil":
-                if method in ("copy", "copy2", "copyfile", "copytree", "move"):
+    def _handle_thread_spawn(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if method == "start":
+            self._add(
+                SideEffectType.GoroutineSpawn,
+                "Goroutine/thread spawn via .start()",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        return False
+
+    def _handle_mutex_op(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if method in _MUTEX_METHODS:
+            self._add(
+                SideEffectType.MutexOp,
+                f"Mutex operation via .{method}()",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        return False
+
+    def _handle_channel_send(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if method in _QUEUE_PUT_METHODS:
+            self._add(
+                SideEffectType.ChannelSend,
+                f"Channel send via .{method}()",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        return False
+
+    def _handle_task_cancel(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if method == "cancel":
+            self._add(
+                SideEffectType.ContextCancellation,
+                "Task cancellation via .cancel()",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        return False
+
+    def _handle_barrier_wait(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if method == "wait" and obj_name_str is not None:
+            self._add(
+                SideEffectType.WaitGroupOp,
+                "Wait group synchronization via .wait()",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        return False
+
+    def _handle_db_methods(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if method in _DB_CURSOR_METHODS:
+            self._add(
+                SideEffectType.DatabaseWrite,
+                f"Database write via .{method}()",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        if method in _DB_TRANSACTION_METHODS:
+            self._add(
+                SideEffectType.DatabaseTransaction,
+                f"Database transaction via .{method}()",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        return False
+
+    def _handle_http_response(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if obj_name_str in _HTTP_RESPONSE_NAMES and method == "write":
+            self._add(
+                SideEffectType.HTTPResponseWrite,
+                "HTTP response write",
+                node,
+                target=obj_name_str,
+            )
+            return True
+        return False
+
+    def _handle_writer_methods(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if method in _WRITER_METHODS:
+            if obj_name_str is not None and obj_name_str in self.open_vars:
+                self._add(
+                    SideEffectType.StreamOutput,
+                    f"Stream output via {obj_name_str}.{method}()",
+                    node,
+                    target=obj_name_str,
+                )
+                if self.open_vars[obj_name_str]:
                     self._add(
                         SideEffectType.FileSystemWrite,
-                        f"Filesystem write via shutil.{method}",
-                        node,
-                    )
-                    return
-                if method == "rmtree":
-                    self._add(
-                        SideEffectType.FileSystemDelete,
-                        "Filesystem delete via shutil.rmtree",
-                        node,
-                    )
-                    return
-
-            # Path.write_text / write_bytes / unlink / mkdir / rename / chmod
-            if method == "write_text" or method == "write_bytes":
-                self._add(
-                    SideEffectType.FileSystemWrite,
-                    f"Filesystem write via Path.{method}",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-            if method == "unlink":
-                self._add(
-                    SideEffectType.FileSystemDelete,
-                    "Filesystem delete via Path.unlink",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-            if method in ("mkdir", "rename", "chmod"):
-                self._add(
-                    SideEffectType.FileSystemMeta,
-                    f"Filesystem metadata via Path.{method}",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-
-            # threading.Thread(...).start()  — need to detect .start() on Thread obj
-            if method == "start":
-                # We can't fully prove this is a Thread, but .start() is characteristic
-                self._add(
-                    SideEffectType.GoroutineSpawn,
-                    "Goroutine/thread spawn via .start()",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-
-            # Lock acquire/release
-            if method in _MUTEX_METHODS:
-                self._add(
-                    SideEffectType.MutexOp,
-                    f"Mutex operation via .{method}()",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-
-            # queue.put / put_nowait (ChannelSend)
-            if method in _QUEUE_PUT_METHODS:
-                self._add(
-                    SideEffectType.ChannelSend,
-                    f"Channel send via .{method}()",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-
-            # asyncio.CancelledError handling / task.cancel()
-            if method == "cancel":
-                self._add(
-                    SideEffectType.ContextCancellation,
-                    "Task cancellation via .cancel()",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-
-            # Barrier.wait → WaitGroupOp
-            if method == "wait" and obj_name_str is not None:
-                self._add(
-                    SideEffectType.WaitGroupOp,
-                    "Wait group synchronization via .wait()",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-
-            # DB cursor execute/executemany
-            if method in _DB_CURSOR_METHODS:
-                self._add(
-                    SideEffectType.DatabaseWrite,
-                    f"Database write via .{method}()",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-
-            # DB commit/rollback
-            if method in _DB_TRANSACTION_METHODS:
-                self._add(
-                    SideEffectType.DatabaseTransaction,
-                    f"Database transaction via .{method}()",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-
-            # HTTP response write
-            if obj_name_str in _HTTP_RESPONSE_NAMES and method == "write":
-                self._add(
-                    SideEffectType.HTTPResponseWrite,
-                    "HTTP response write",
-                    node,
-                    target=obj_name_str,
-                )
-                return
-
-            # open(...) detected inline via open(...,'w') and .write
-            # File write: .write / .writelines on a concretely-opened file
-            # → StreamOutput; otherwise → WriterOutput (never double-emit)
-            if method in _WRITER_METHODS:
-                if obj_name_str is not None and obj_name_str in self.open_vars:
-                    self._add(
-                        SideEffectType.StreamOutput,
-                        f"Stream output via {obj_name_str}.{method}()",
+                        f"Filesystem write via {obj_name_str}.{method}()",
                         node,
                         target=obj_name_str,
                     )
-                    # Co-emit FileSystemWrite only for write-mode opens (not 'r')
-                    if self.open_vars[obj_name_str]:
-                        self._add(
-                            SideEffectType.FileSystemWrite,
-                            f"Filesystem write via {obj_name_str}.{method}()",
-                            node,
-                            target=obj_name_str,
-                        )
-                else:
-                    # Parameter or unknown-origin file object
-                    self._add(
-                        SideEffectType.WriterOutput,
-                        f"Writer output via .{method}()",
-                        node,
-                        target=obj_name_str,
-                    )
-                return
-
-            # Container mutating methods (with self.x and param precedence)
-            if method in _CONTAINER_MUTATING_METHODS:
-                # Check chained: self.attr.method() → obj is Attribute(Name('self'),...)
-                _obj_root: str | None = None
-                if isinstance(obj, ast.Attribute) and isinstance(obj.value, ast.Name):
-                    _obj_root = obj.value.id
-                if obj_name_str in ("self", "cls") or _obj_root in ("self", "cls"):
-                    self._add(
-                        SideEffectType.ReceiverMutation,
-                        f"Mutates receiver via self.{method}()",
-                        node,
-                        target=f"self.{method}",
-                    )
-                elif obj_name_str is not None and obj_name_str in self.param_names:
-                    self._add(
-                        SideEffectType.PointerArgMutation,
-                        f"Mutates parameter {obj_name_str!r} via .{method}()",
-                        node,
-                        target=obj_name_str,
-                    )
-                else:
-                    self._add(
-                        SideEffectType.ContainerMutation,
-                        f"Container mutation via .{method}()",
-                        node,
-                        target=obj_name_str,
-                    )
-                return
-
-            # Map mutating methods
-            if method in _MAP_MUTATING_METHODS:
-                if obj_name_str is not None and obj_name_str in self.param_names:
-                    self._add(
-                        SideEffectType.PointerArgMutation,
-                        f"Mutates parameter {obj_name_str!r} via .{method}()",
-                        node,
-                        target=obj_name_str,
-                    )
-                else:
-                    self._add(
-                        SideEffectType.MapMutation,
-                        f"Map mutation via .{method}()",
-                        node,
-                        target=obj_name_str,
-                    )
-                return
-
-            # Unknown attribute call on object → ambiguous if not a known safe method
-            # Check if it's a call on an imported module attribute
-            if obj_name_str is not None and obj_name_str in self.import_aliases:
-                # Module-level call on an import — could be anything, treat as ambiguous
-                # But skip if it's an obviously known module operation we haven't caught
-                pass
-
-            # Log methods on a logger-like object (variable named logger/log)
-            if obj_name_str in ("logger", "log") and method in _LOG_METHODS:
+            else:
                 self._add(
-                    SideEffectType.LogWrite,
-                    f"Log write via {obj_name_str}.{method}",
+                    SideEffectType.WriterOutput,
+                    f"Writer output via .{method}()",
                     node,
+                    target=obj_name_str,
                 )
-                return
+            return True
+        return False
 
-        # open(..., 'w') standalone call (not already consumed above)
+    def _handle_container_methods(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        obj, method, obj_name_str = self._method_parts(fn)
+        if method in _CONTAINER_MUTATING_METHODS:
+            obj_root: str | None = None
+            if isinstance(obj, ast.Attribute) and isinstance(obj.value, ast.Name):
+                obj_root = obj.value.id
+            if obj_name_str in ("self", "cls") or obj_root in ("self", "cls"):
+                self._add(
+                    SideEffectType.ReceiverMutation,
+                    f"Mutates receiver via self.{method}()",
+                    node,
+                    target=f"self.{method}",
+                )
+            elif obj_name_str is not None and obj_name_str in self.param_names:
+                self._add(
+                    SideEffectType.PointerArgMutation,
+                    f"Mutates parameter {obj_name_str!r} via .{method}()",
+                    node,
+                    target=obj_name_str,
+                )
+            else:
+                self._add(
+                    SideEffectType.ContainerMutation,
+                    f"Container mutation via .{method}()",
+                    node,
+                    target=obj_name_str,
+                )
+            return True
+        return False
+
+    def _handle_map_methods(self, node: ast.Call, fn: ast.Attribute) -> bool:
+        _, method, obj_name_str = self._method_parts(fn)
+        if method in _MAP_MUTATING_METHODS:
+            if obj_name_str is not None and obj_name_str in self.param_names:
+                self._add(
+                    SideEffectType.PointerArgMutation,
+                    f"Mutates parameter {obj_name_str!r} via .{method}()",
+                    node,
+                    target=obj_name_str,
+                )
+            else:
+                self._add(
+                    SideEffectType.MapMutation,
+                    f"Map mutation via .{method}()",
+                    node,
+                    target=obj_name_str,
+                )
+            return True
+        return False
+
+    # -- open(..., 'w') -------------------------------------------------------
+    def _handle_open_write(self, node: ast.Call, fn: ast.expr) -> bool:
         if isinstance(fn, ast.Name) and fn.id == "open":
             mode = _open_mode(node)
             if mode is not None and _is_write_mode(mode):
@@ -1221,9 +1265,11 @@ class _EffectVisitor(ast.NodeVisitor):
                     f"Filesystem write via open(..., {mode!r})",
                     node,
                 )
-            return
+            return True
+        return False
 
-        # computed getattr(obj, name)() call
+    # -- getattr(obj, name)() ------------------------------------------------
+    def _handle_computed_getattr_call(self, node: ast.Call, fn: ast.expr) -> bool:
         if (
             isinstance(fn, ast.Call)
             and isinstance(fn.func, ast.Name)
@@ -1235,36 +1281,37 @@ class _EffectVisitor(ast.NodeVisitor):
                 node,
                 detail={"confidence": "ambiguous"},
             )
-            return
+            return True
+        return False
 
-        # Name-call fallback resolves pure builtins, direct local definitions,
-        # then guarded module definitions. Imports and naming conventions do not
-        # prove purity, so unresolved names remain ambiguous.
-        if isinstance(fn, ast.Name):
-            name = fn.id
-            if name in _PURE_BUILTINS:
-                return  # pure builtin, no effect
-            if name in self.local_func_names:
-                return  # directly resolved local definition
-            module_resolved = (
-                name in self.module_func_names
-                and name not in self.local_binding_names
-                and name not in self.nonlocal_names
-                and (
-                    name in self.global_names
-                    or self.enclosing_bindings is None
-                    or name not in self.enclosing_bindings
-                )
+    # -- name-call fallback ---------------------------------------------------
+    def _handle_name_call_fallback(self, node: ast.Call, fn: ast.expr) -> bool:
+        if not isinstance(fn, ast.Name):
+            return False
+        name = fn.id
+        if name in _PURE_BUILTINS:
+            return True
+        if name in self.local_func_names:
+            return True
+        module_resolved = (
+            name in self.module_func_names
+            and name not in self.local_binding_names
+            and name not in self.nonlocal_names
+            and (
+                name in self.global_names
+                or self.enclosing_bindings is None
+                or name not in self.enclosing_bindings
             )
-            if module_resolved:
-                return  # statically-resolvable pure local call is NOT an effect
-            # Unknown external call → CallbackInvocation ambiguous
-            self._add(
-                SideEffectType.CallbackInvocation,
-                f"Ambiguous call to {name!r}",
-                node,
-                detail={"confidence": "ambiguous"},
-            )
+        )
+        if module_resolved:
+            return True
+        self._add(
+            SideEffectType.CallbackInvocation,
+            f"Ambiguous call to {name!r}",
+            node,
+            detail={"confidence": "ambiguous"},
+        )
+        return True
 
     # -- Subscript assignments to os.environ ---------------------------------
 
