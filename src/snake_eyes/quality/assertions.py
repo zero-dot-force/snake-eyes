@@ -627,73 +627,99 @@ class _AssertionVisitor:
             self.visit_stmt(stmt)
         self._depth -= 1
 
+    def _visit_assert(self, stmt: ast.Assert) -> None:
+        atype = _classify_assert_stmt(stmt)
+        self._append_assertion(atype, stmt, stmt.test)
+
+    def _visit_call_expr(self, stmt: ast.Expr) -> None:
+        call = stmt.value
+        if not isinstance(call, ast.Call):
+            return
+        if id(call) not in self._skip_call_ids:
+            call_atype = _classify_call(call)
+            if call_atype is not None:
+                expression = (
+                    None
+                    if call_atype == "error_check"
+                    else self._call_asserted_expression(call)
+                )
+                self._append_assertion(call_atype, call, expression)
+            else:
+                self._invalidate_iteration_bindings(stmt)
+
+    def _visit_with(self, stmt: ast.With) -> None:
+        for item in stmt.items:
+            ctx = item.context_expr
+            if isinstance(ctx, ast.Call) and (
+                _is_raises_warns_call(ctx) or _is_assert_raises_call(ctx)
+            ):
+                self._append_assertion("error_check", ctx)
+            if item.optional_vars is not None:
+                self._invalidate_iteration_bindings(item.optional_vars)
+        # Descend into with body
+        self.visit_stmts(stmt.body)
+
+    def _visit_for(self, stmt: ast.For | ast.AsyncFor) -> None:
+        self._invalidate_iteration_bindings(stmt.target)
+        context = _IterationContext(
+            observation=ContainerStateObservation(
+                kind="iteration", candidate=stmt.iter
+            ),
+            bound_names=_bound_names(stmt.target),
+        )
+        self._iteration_contexts.append(context)
+        try:
+            self.visit_stmts(stmt.body)
+        finally:
+            self._iteration_contexts.pop()
+        if stmt.orelse:
+            self.visit_stmts(stmt.orelse)
+
+    def _visit_while(self, stmt: ast.While) -> None:
+        self.visit_stmts(stmt.body)
+        if stmt.orelse:
+            self.visit_stmts(stmt.orelse)
+
+    def _visit_if(self, stmt: ast.If) -> None:
+        self.visit_stmts(stmt.body)
+        if stmt.orelse:
+            self.visit_stmts(stmt.orelse)
+
+    def _visit_try(self, stmt: ast.Try) -> None:
+        self.visit_stmts(stmt.body)
+        for handler in stmt.handlers:
+            if handler.name is not None:
+                for context in self._iteration_contexts:
+                    if handler.name in context.bound_names:
+                        context.active = False
+            self.visit_stmts(handler.body)
+        if stmt.orelse:
+            self.visit_stmts(stmt.orelse)
+        if stmt.finalbody:
+            self.visit_stmts(stmt.finalbody)
+
+    def _visit_match(self, stmt: ast.Match) -> None:
+        for case in stmt.cases:
+            self._invalidate_iteration_bindings(case.pattern)
+            self.visit_stmts(case.body)
+
     def visit_stmt(self, stmt: ast.stmt) -> None:
         if isinstance(stmt, ast.Assert):
-            atype = _classify_assert_stmt(stmt)
-            self._append_assertion(atype, stmt, stmt.test)
+            self._visit_assert(stmt)
         elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
-            call = stmt.value
-            if id(call) not in self._skip_call_ids:
-                call_atype = _classify_call(call)
-                if call_atype is not None:
-                    expression = (
-                        None
-                        if call_atype == "error_check"
-                        else self._call_asserted_expression(call)
-                    )
-                    self._append_assertion(call_atype, call, expression)
-                else:
-                    self._invalidate_iteration_bindings(stmt)
+            self._visit_call_expr(stmt)
         elif isinstance(stmt, ast.With):
-            for item in stmt.items:
-                ctx = item.context_expr
-                if isinstance(ctx, ast.Call) and (
-                    _is_raises_warns_call(ctx) or _is_assert_raises_call(ctx)
-                ):
-                    self._append_assertion("error_check", ctx)
-                if item.optional_vars is not None:
-                    self._invalidate_iteration_bindings(item.optional_vars)
-            # Descend into with body
-            self.visit_stmts(stmt.body)
+            self._visit_with(stmt)
         elif isinstance(stmt, (ast.For, ast.AsyncFor)):
-            self._invalidate_iteration_bindings(stmt.target)
-            context = _IterationContext(
-                observation=ContainerStateObservation(
-                    kind="iteration", candidate=stmt.iter
-                ),
-                bound_names=_bound_names(stmt.target),
-            )
-            self._iteration_contexts.append(context)
-            try:
-                self.visit_stmts(stmt.body)
-            finally:
-                self._iteration_contexts.pop()
-            if stmt.orelse:
-                self.visit_stmts(stmt.orelse)
+            self._visit_for(stmt)
         elif isinstance(stmt, ast.While):
-            self.visit_stmts(stmt.body)
-            if stmt.orelse:
-                self.visit_stmts(stmt.orelse)
+            self._visit_while(stmt)
         elif isinstance(stmt, ast.If):
-            self.visit_stmts(stmt.body)
-            if stmt.orelse:
-                self.visit_stmts(stmt.orelse)
+            self._visit_if(stmt)
         elif isinstance(stmt, ast.Try):
-            self.visit_stmts(stmt.body)
-            for handler in stmt.handlers:
-                if handler.name is not None:
-                    for context in self._iteration_contexts:
-                        if handler.name in context.bound_names:
-                            context.active = False
-                self.visit_stmts(handler.body)
-            if stmt.orelse:
-                self.visit_stmts(stmt.orelse)
-            if stmt.finalbody:
-                self.visit_stmts(stmt.finalbody)
+            self._visit_try(stmt)
         elif isinstance(stmt, ast.Match):
-            for case in stmt.cases:
-                self._invalidate_iteration_bindings(case.pattern)
-                self.visit_stmts(case.body)
+            self._visit_match(stmt)
         else:
             self._invalidate_iteration_bindings(stmt)
         # Do NOT descend into FunctionDef / AsyncFunctionDef / ClassDef

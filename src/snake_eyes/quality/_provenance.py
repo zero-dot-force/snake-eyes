@@ -113,6 +113,39 @@ def _resolve_import_from(node: ast.ImportFrom, current_package: str) -> str | No
     return ".".join(base_parts) or None
 
 
+def _append_funcdef_bound_names(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    names: set[str],
+    *,
+    depth: int,
+) -> None:
+    """Append names bound by a function definition's expression list."""
+    names.add(node.name)
+    expressions: list[ast.expr] = [
+        *node.decorator_list,
+        *node.args.defaults,
+        *(default for default in node.args.kw_defaults if default is not None),
+    ]
+    if node.returns is not None:
+        expressions.append(node.returns)
+    for expression in expressions:
+        _append_bound_names(expression, names, depth=depth + 1)
+
+
+def _append_classdef_bound_names(
+    node: ast.ClassDef,
+    names: set[str],
+    *,
+    depth: int,
+) -> None:
+    """Append names bound by a class definition's expression list."""
+    names.add(node.name)
+    for expression in (*node.decorator_list, *node.bases):
+        _append_bound_names(expression, names, depth=depth + 1)
+    for keyword in node.keywords:
+        _append_bound_names(keyword.value, names, depth=depth + 1)
+
+
 def _append_bound_names(
     node: ast.AST,
     names: set[str],
@@ -123,23 +156,10 @@ def _append_bound_names(
     if depth > MAX_AST_DEPTH:
         raise RecursionError("AST depth budget exceeded in lexical provenance")
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        names.add(node.name)
-        expressions = [
-            *node.decorator_list,
-            *node.args.defaults,
-            *(default for default in node.args.kw_defaults if default is not None),
-        ]
-        if node.returns is not None:
-            expressions.append(node.returns)
-        for expression in expressions:
-            _append_bound_names(expression, names, depth=depth + 1)
+        _append_funcdef_bound_names(node, names, depth=depth)
         return
     if isinstance(node, ast.ClassDef):
-        names.add(node.name)
-        for expression in (*node.decorator_list, *node.bases):
-            _append_bound_names(expression, names, depth=depth + 1)
-        for keyword in node.keywords:
-            _append_bound_names(keyword.value, names, depth=depth + 1)
+        _append_classdef_bound_names(node, names, depth=depth)
         return
     if isinstance(node, ast.Lambda):
         return
