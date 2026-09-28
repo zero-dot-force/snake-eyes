@@ -210,6 +210,111 @@ def _normalize_path(p: str) -> str:
     return str(pathlib.Path(p).resolve())
 
 
+def _parse_modules(
+    manager: Any,
+    root: pathlib.Path,
+    graph_files: list[str],
+) -> list[tuple[str, Any]]:
+    """Parse analyzable graph files into (normalized_path, module) pairs."""
+    parsed: list[tuple[str, Any]] = []
+    for rel in graph_files:
+        abs_path = root / rel
+        if not is_analyzable_file(abs_path, label=rel):
+            continue
+        try:
+            modname = derive_package(rel)
+            module = manager.ast_from_file(str(abs_path), modname, source=True)
+            norm = _normalize_path(str(abs_path))
+            parsed.append((norm, module))
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            print(
+                f"snake-eyes: test_mapping strategy-3 skipping {rel}:"
+                f" {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+    return parsed
+
+
+def _collect_defined_names(parsed: list[tuple[str, Any]]) -> set[str]:
+    """Return the set of function/method names defined in parsed modules."""
+    defined_names: set[str] = set()
+    for _, module in parsed:
+        for func in module.nodes_of_class(
+            (astroid_nodes.FunctionDef, astroid_nodes.AsyncFunctionDef)
+        ):
+            defined_names.add(func.name)
+    return defined_names
+
+
+def _callee_file(candidate: Any) -> str | None:
+    """Return the normalized file path for an inferred in-project callee."""
+    if candidate is Uninferable:
+        return None
+    if not isinstance(
+        candidate,
+        (astroid_nodes.FunctionDef, astroid_nodes.AsyncFunctionDef),
+    ):
+        return None
+    callee_file = getattr(candidate.root(), "file", None)
+    if callee_file is None:
+        return None
+    return _normalize_path(callee_file)
+
+
+def _resolve_call_edges(
+    parsed: list[tuple[str, Any]],
+    defined_names: set[str],
+    edges: dict[str, set[str]],
+) -> None:
+    """Resolve in-project callees for every call site in parsed modules."""
+    analyzed_norms: set[str] = {norm for norm, _ in parsed}
+    for source_norm, module in parsed:
+        try:
+            call_iter = module.nodes_of_class(astroid_nodes.Call)
+        except Exception:
+            continue
+        for call in call_iter:
+            fn = call.func
+            callee_name: str | None = None
+            if isinstance(fn, astroid_nodes.Name):
+                callee_name = fn.name
+            elif isinstance(fn, astroid_nodes.Attribute):
+                callee_name = fn.attrname
+            if callee_name is None:
+                continue
+            # Pre-filter: skip callee names not defined in the project.
+            # Bounds transitive parsing to in-project resolution and removes
+            # the infer-then-discard waste for external (pytest/mock/stdlib)
+            # call sites.
+            if callee_name not in defined_names:
+                continue
+            try:
+                inferred = list(call.func.infer())
+            except Exception as exc:
+                print(
+                    f"snake-eyes: test_mapping strategy-3 skipping"
+                    f" uninferable call site {callee_name!r}:"
+                    f" {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                continue
+            for candidate in inferred:
+                try:
+                    callee_norm = _callee_file(candidate)
+                    if callee_norm is not None and callee_norm in analyzed_norms:
+                        edges.setdefault(source_norm, set()).add(callee_norm)
+                except Exception as exc:
+                    print(
+                        f"snake-eyes: test_mapping strategy-3 skipping candidate:"
+                        f" {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
+                    continue
+
+
 def _build_call_graph(
     root_abs: str,
     graph_files: list[str],
@@ -220,101 +325,11 @@ def _build_call_graph(
         manager.clear_cache()
 
         edges: dict[str, set[str]] = {}
-        # list of (norm_path, module) pairs
-        parsed: list[tuple[str, Any]] = []
-
         root = pathlib.Path(root_abs)
 
-        for rel in graph_files:
-            abs_path = root / rel
-            if not is_analyzable_file(abs_path, label=rel):
-                continue
-            try:
-                modname = derive_package(rel)
-                module = manager.ast_from_file(str(abs_path), modname, source=True)
-                norm = _normalize_path(str(abs_path))
-                parsed.append((norm, module))
-            except FileNotFoundError:
-                raise
-            except Exception as exc:
-                print(
-                    f"snake-eyes: test_mapping strategy-3 skipping {rel}:"
-                    f" {type(exc).__name__}: {exc}",
-                    file=sys.stderr,
-                )
-                continue
-
-        analyzed_norms: set[str] = {norm for norm, _ in parsed}
-
-        # Build the set of function/method names defined anywhere in the analyzed
-        # project.  Inference is attempted only for call sites whose unqualified
-        # callee name is in this set, so astroid does not parse ambient
-        # stdlib/site-packages modules (which bypass the 16 MiB byte-cap) to
-        # resolve external callees that would never produce an in-project edge.
-        # Mirrors analysis/inference.py _build() defined_names pattern.
-        modules = [module for _, module in parsed]
-        defined_names: set[str] = set()
-        for module in modules:
-            for func in module.nodes_of_class(
-                (astroid_nodes.FunctionDef, astroid_nodes.AsyncFunctionDef)
-            ):
-                defined_names.add(func.name)
-
-        for source_norm, module in parsed:
-            try:
-                call_iter = module.nodes_of_class(astroid_nodes.Call)
-            except Exception:
-                continue
-            for call in call_iter:
-                fn = call.func
-                callee_name: str | None = None
-                if isinstance(fn, astroid_nodes.Name):
-                    callee_name = fn.name
-                elif isinstance(fn, astroid_nodes.Attribute):
-                    callee_name = fn.attrname
-                if callee_name is None:
-                    continue
-                # Pre-filter: skip callee names not defined in the project.
-                # Bounds transitive parsing to in-project resolution and removes
-                # the infer-then-discard waste for external (pytest/mock/stdlib)
-                # call sites.
-                if callee_name not in defined_names:
-                    continue
-                try:
-                    inferred = list(call.func.infer())
-                except Exception as exc:
-                    print(
-                        f"snake-eyes: test_mapping strategy-3 skipping"
-                        f" uninferable call site {callee_name!r}:"
-                        f" {type(exc).__name__}: {exc}",
-                        file=sys.stderr,
-                    )
-                    continue
-                for candidate in inferred:
-                    try:
-                        if candidate is Uninferable:
-                            continue
-                        if not isinstance(
-                            candidate,
-                            (
-                                astroid_nodes.FunctionDef,
-                                astroid_nodes.AsyncFunctionDef,
-                            ),
-                        ):
-                            continue
-                        callee_file = getattr(candidate.root(), "file", None)
-                        if callee_file is None:
-                            continue
-                        callee_norm = _normalize_path(callee_file)
-                        if callee_norm in analyzed_norms:
-                            edges.setdefault(source_norm, set()).add(callee_norm)
-                    except Exception as exc:
-                        print(
-                            f"snake-eyes: test_mapping strategy-3 skipping candidate:"
-                            f" {type(exc).__name__}: {exc}",
-                            file=sys.stderr,
-                        )
-                        continue
+        parsed = _parse_modules(manager, root, graph_files)
+        defined_names = _collect_defined_names(parsed)
+        _resolve_call_edges(parsed, defined_names, edges)
 
         return _CallGraph(edges=edges)
 

@@ -29,7 +29,7 @@ from ..discovery import discover
 from ._provenance import ProvenanceResolver
 from .assertions import AssertionInfo, collect_assertions
 from .mapping import infer_side_effect_type
-from .pairing import pair_tests
+from .pairing import PairedResult, pair_tests
 
 
 def _is_testcase_subclass(class_node: ast.ClassDef) -> bool:
@@ -198,6 +198,100 @@ def run_test_mapping(
     #    `collect_assertions` swallows RecursionError internally and returns
     #    partial results, so a degenerate walk yields a partial list rather
     #    than an error.
+    assertions_by_test, contexts_by_test = _collect_test_evidence(
+        test_functions, test_trees, resolver
+    )
+
+    # 5. Compute assertion-detection confidence (integer, round half up).
+    total = len(assertions_by_test)
+    detected = sum(1 for assertions in assertions_by_test.values() if assertions)
+    if total > 0:
+        confidence = (100 * detected + total // 2) // total
+    else:
+        confidence = 0
+
+    # 6. Pair tests to production functions.
+    # The graph node set includes BOTH source AND test files so that test-file
+    # nodes have outgoing edges for transitive BFS (strategy 3).  Target
+    # candidacy is still restricted to source-only `target_records` above.
+    # With no production targets, every pairing strategy is a no-op, so skip
+    # the (expensive) astroid call-graph build entirely.
+    if target_records:
+        graph_files = list(discovered.source_files) + list(discovered.test_files)
+        pairs = pair_tests(
+            test_functions=test_functions,
+            target_records=target_records,
+            test_trees=test_trees,
+            root_abs=str(root),
+            graph_files=graph_files,
+        )
+    else:
+        pairs = []
+
+    # 7. Build target-identity and import-package indexes for provenance.
+    #    Built lazily: only when there are pairs to map (matching the
+    #    container-mutation pipeline, which returned early on no pairs).
+    (
+        target_records_by_identity,
+        target_identity_counts,
+        target_import_packages,
+    ) = _build_target_indexes(target_records, pairs, resolver)
+
+    # 8. Build mapping rows from pre-collected assertions.
+    rows = _build_mapping_rows(
+        pairs,
+        assertions_by_test,
+        contexts_by_test,
+        target_records_by_identity,
+        target_identity_counts,
+        target_import_packages,
+        resolver,
+    )
+
+    # 9. Sort by composite key (numeric line, col for tiebreaking).
+    rows.sort(
+        key=lambda row: (
+            row["test_file"],
+            row["test_function"],
+            row["_line"],
+            row["_col"],
+            row["target_package"],
+            row["target_function"],
+        )
+    )
+
+    # 10. Strip internal tiebreaker fields.
+    mappings = [
+        {
+            "test_function": row["test_function"],
+            "test_file": row["test_file"],
+            "assertion_location": row["assertion_location"],
+            "assertion_type": row["assertion_type"],
+            "target_function": row["target_function"],
+            "target_package": row["target_package"],
+            "side_effect_type": row["side_effect_type"],
+            "confidence": row["confidence"],
+        }
+        for row in rows
+    ]
+
+    return TestMappingResult(
+        mappings=mappings,
+        assertion_detection_confidence=confidence,
+    )
+
+
+def _collect_test_evidence(
+    test_functions: list[tuple[str, str]],
+    test_trees: dict[str, ast.Module],
+    resolver: ProvenanceResolver,
+) -> tuple[
+    dict[tuple[str, str], list[AssertionInfo]],
+    dict[
+        tuple[str, str],
+        tuple[ast.FunctionDef | ast.AsyncFunctionDef, Any, bool],
+    ],
+]:
     assertions_by_test: dict[tuple[str, str], list[AssertionInfo]] = {}
     contexts_by_test: dict[
         tuple[str, str],
@@ -238,36 +332,18 @@ def run_test_mapping(
             provenance_context,
             provenance_ready,
         )
+    return assertions_by_test, contexts_by_test
 
-    # 5. Compute assertion-detection confidence (integer, round half up).
-    total = len(assertions_by_test)
-    detected = sum(1 for assertions in assertions_by_test.values() if assertions)
-    if total > 0:
-        confidence = (100 * detected + total // 2) // total
-    else:
-        confidence = 0
 
-    # 6. Pair tests to production functions.
-    # The graph node set includes BOTH source AND test files so that test-file
-    # nodes have outgoing edges for transitive BFS (strategy 3).  Target
-    # candidacy is still restricted to source-only `target_records` above.
-    # With no production targets, every pairing strategy is a no-op, so skip
-    # the (expensive) astroid call-graph build entirely.
-    if target_records:
-        graph_files = list(discovered.source_files) + list(discovered.test_files)
-        pairs = pair_tests(
-            test_functions=test_functions,
-            target_records=target_records,
-            test_trees=test_trees,
-            root_abs=str(root),
-            graph_files=graph_files,
-        )
-    else:
-        pairs = []
-
-    # 7. Build target-identity and import-package indexes for provenance.
-    #    Built lazily: only when there are pairs to map (matching the
-    #    container-mutation pipeline, which returned early on no pairs).
+def _build_target_indexes(
+    target_records: list[FunctionRecord],
+    pairs: list[PairedResult],
+    resolver: ProvenanceResolver,
+) -> tuple[
+    dict[tuple[str, str], FunctionRecord],
+    dict[tuple[str, str], int],
+    dict[tuple[str, str], frozenset[str]],
+]:
     target_records_by_identity: dict[tuple[str, str], FunctionRecord] = {}
     target_identity_counts: dict[tuple[str, str], int] = {}
     packages_by_file: dict[str, frozenset[str]] = {}
@@ -296,10 +372,26 @@ def run_test_mapping(
             (record.file, record.name): packages_by_file[record.file]
             for record in target_records
         }
+    return (
+        target_records_by_identity,
+        target_identity_counts,
+        target_import_packages,
+    )
 
-    # 8. Build mapping rows from pre-collected assertions.
+
+def _build_mapping_rows(
+    pairs: list[PairedResult],
+    assertions_by_test: dict[tuple[str, str], list[AssertionInfo]],
+    contexts_by_test: dict[
+        tuple[str, str],
+        tuple[ast.FunctionDef | ast.AsyncFunctionDef, Any, bool],
+    ],
+    target_records_by_identity: dict[tuple[str, str], FunctionRecord],
+    target_identity_counts: dict[tuple[str, str], int],
+    target_import_packages: dict[tuple[str, str], frozenset[str]],
+    resolver: ProvenanceResolver,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-
     for pair in pairs:
         assertions = assertions_by_test.get((pair.test_function, pair.test_file), [])
         context = contexts_by_test.get((pair.test_function, pair.test_file))
@@ -344,35 +436,4 @@ def run_test_mapping(
                     "_col": assertion.col,
                 }
             )
-
-    # 9. Sort by composite key (numeric line, col for tiebreaking).
-    rows.sort(
-        key=lambda row: (
-            row["test_file"],
-            row["test_function"],
-            row["_line"],
-            row["_col"],
-            row["target_package"],
-            row["target_function"],
-        )
-    )
-
-    # 10. Strip internal tiebreaker fields.
-    mappings = [
-        {
-            "test_function": row["test_function"],
-            "test_file": row["test_file"],
-            "assertion_location": row["assertion_location"],
-            "assertion_type": row["assertion_type"],
-            "target_function": row["target_function"],
-            "target_package": row["target_package"],
-            "side_effect_type": row["side_effect_type"],
-            "confidence": row["confidence"],
-        }
-        for row in rows
-    ]
-
-    return TestMappingResult(
-        mappings=mappings,
-        assertion_detection_confidence=confidence,
-    )
+    return rows

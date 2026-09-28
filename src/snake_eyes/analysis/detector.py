@@ -1611,47 +1611,60 @@ class _ScopeBindingCollector(ast.NodeVisitor):
         class_names: set[str] = set()
         class_aliases: dict[str, set[str]] = {}
         for statement, collector in statement_results:
-            self.unknown_alias_mutation |= collector.unknown_alias_mutation
-            for name in collector.constructor_mutations:
-                if name in class_names and name not in class_aliases:
-                    continue
-                for source in class_aliases.get(name, {name}):
-                    self.constructor_mutations.update(self._alias_sources(source))
-            self.global_rebindings.update(class_globals & set(collector.counts))
-            if isinstance(statement, ast.Delete):
-                class_names.difference_update(collector.deleted_names)
-                for name in collector.deleted_names:
-                    class_aliases.pop(name, None)
+            self._process_class_statement(
+                statement, collector, class_globals, class_names, class_aliases
+            )
+
+    def _process_class_statement(
+        self,
+        statement: ast.stmt,
+        collector: _ScopeBindingCollector,
+        class_globals: set[str],
+        class_names: set[str],
+        class_aliases: dict[str, set[str]],
+    ) -> None:
+        self.unknown_alias_mutation |= collector.unknown_alias_mutation
+        for name in collector.constructor_mutations:
+            if name in class_names and name not in class_aliases:
                 continue
-            if isinstance(
-                statement,
-                (
-                    ast.Assign,
-                    ast.AugAssign,
-                    ast.Import,
-                    ast.ImportFrom,
-                    ast.FunctionDef,
-                    ast.AsyncFunctionDef,
-                    ast.ClassDef,
-                ),
-            ):
-                class_names.update(collector.counts)
-                for name in collector.counts:
-                    class_aliases.pop(name, None)
-                for alias in collector.aliases:
-                    sources: set[str] = set()
-                    for source in collector._alias_sources(alias):
-                        sources.update(class_aliases.get(source, {source}))
-                    class_aliases[alias] = sources
-            elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
-                class_names.update(collector.counts)
-                for name in collector.counts:
-                    class_aliases.pop(name, None)
-                for alias in collector.aliases:
-                    sources = set()
-                    for source in collector._alias_sources(alias):
-                        sources.update(class_aliases.get(source, {source}))
-                    class_aliases[alias] = sources
+            for source in class_aliases.get(name, {name}):
+                self.constructor_mutations.update(self._alias_sources(source))
+        self.global_rebindings.update(class_globals & set(collector.counts))
+        if isinstance(statement, ast.Delete):
+            class_names.difference_update(collector.deleted_names)
+            for name in collector.deleted_names:
+                class_aliases.pop(name, None)
+            return
+        if isinstance(
+            statement,
+            (
+                ast.Assign,
+                ast.AugAssign,
+                ast.Import,
+                ast.ImportFrom,
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.ClassDef,
+            ),
+        ):
+            self._record_class_bindings(collector, class_names, class_aliases)
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            self._record_class_bindings(collector, class_names, class_aliases)
+
+    def _record_class_bindings(
+        self,
+        collector: _ScopeBindingCollector,
+        class_names: set[str],
+        class_aliases: dict[str, set[str]],
+    ) -> None:
+        class_names.update(collector.counts)
+        for name in collector.counts:
+            class_aliases.pop(name, None)
+        for alias in collector.aliases:
+            sources: set[str] = set()
+            for source in collector._alias_sources(alias):
+                sources.update(class_aliases.get(source, {source}))
+            class_aliases[alias] = sources
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         self._visit_arguments(node.args)
@@ -1917,50 +1930,19 @@ def _analyze_func_node(
     global_names = scope_bindings.global_names
     nonlocal_names = scope_bindings.nonlocal_names
     open_vars = _collect_open_vars(func_node)
-    # Collect names of locally-defined functions and classes visible in this scope:
-    # nested functions/classes defined directly inside this function, plus all
-    # module-level function/class names (passed by the caller from the module tree).
-    # Calls to any of these are statically-resolvable pure local calls or class
-    # constructors and are NOT effects.
     bound_names = set(scope_bindings.counts)
-    direct_definitions = {
-        id(statement)
-        for statement in func_node.body
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-    }
-    resolved_local_names = {
-        name
-        for name, function_node in scope_bindings.functions.items()
-        if scope_bindings.counts[name] == 1 and id(function_node) in direct_definitions
-    }
-    class_base_shadows = _ShadowedNames(
+    resolved_local_names = _resolve_local_names(
+        func_node,
+        scope_bindings,
         bound_names,
         module_binding_names,
         enclosing_bindings,
         global_names,
     )
-    resolved_local_names.update(
-        name
-        for name, class_node in scope_bindings.classes.items()
-        if scope_bindings.counts[name] == 1
-        and id(class_node) in direct_definitions
-        and not scope_bindings.unknown_alias_mutation
-        and name not in scope_bindings.constructor_mutations
-        and _is_trivial_class(class_node, class_base_shadows)
-    )
     local_func_names = resolved_local_names
     local_binding_names = bound_names - resolved_local_names
 
-    # Collect os.environ subscript assignments at the stmt level
-    env_mutation_nodes: list[ast.AST] = []
-    for node in ast.walk(func_node):
-        if isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                if _is_environ_subscript(tgt):
-                    env_mutation_nodes.append(node)
-        elif isinstance(node, ast.AugAssign):
-            if _is_environ_subscript(node.target):
-                env_mutation_nodes.append(node)
+    env_mutation_nodes = _collect_env_mutation_nodes(func_node)
 
     visitor = _EffectVisitor(
         filename=filename,
@@ -1986,7 +1968,82 @@ def _analyze_func_node(
 
     effects = list(visitor.effects)
 
-    # env-mutation nodes (subscript assign to os.environ)
+    _append_env_effects(effects, env_mutation_nodes, filename)
+    _append_descriptor_effect(effects, func_node, filename, is_descriptor_class)
+    _append_resource_effects(effects, func_node, filename, is_resource_mgmt)
+
+    # sentinel effects: attached to first function record or omitted if no functions.
+
+    # Sort effects by (line, col, type)
+    effects.sort(key=_effect_sort_key)
+
+    return FunctionRecord(
+        name=func_node.name,
+        package="",  # filled by caller
+        file=filename,
+        line=func_node.lineno,
+        side_effects=tuple(effects),
+    )
+
+
+def _resolve_local_names(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+    scope_bindings: _ScopeBindingCollector,
+    bound_names: set[str],
+    module_binding_names: set[str] | None,
+    enclosing_bindings: _BindingChain | None,
+    global_names: set[str],
+) -> set[str]:
+    """Resolve statically-known local function/class names in this scope."""
+    direct_definitions = {
+        id(statement)
+        for statement in func_node.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    resolved_local_names = {
+        name
+        for name, function_node in scope_bindings.functions.items()
+        if scope_bindings.counts[name] == 1 and id(function_node) in direct_definitions
+    }
+    class_base_shadows = _ShadowedNames(
+        bound_names,
+        module_binding_names,
+        enclosing_bindings,
+        global_names,
+    )
+    resolved_local_names.update(
+        name
+        for name, class_node in scope_bindings.classes.items()
+        if scope_bindings.counts[name] == 1
+        and id(class_node) in direct_definitions
+        and not scope_bindings.unknown_alias_mutation
+        and name not in scope_bindings.constructor_mutations
+        and _is_trivial_class(class_node, class_base_shadows)
+    )
+    return resolved_local_names
+
+
+def _collect_env_mutation_nodes(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[ast.AST]:
+    """Collect os.environ subscript assignments at the stmt level."""
+    env_mutation_nodes: list[ast.AST] = []
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if _is_environ_subscript(tgt):
+                    env_mutation_nodes.append(node)
+        elif isinstance(node, ast.AugAssign):
+            if _is_environ_subscript(node.target):
+                env_mutation_nodes.append(node)
+    return env_mutation_nodes
+
+
+def _append_env_effects(
+    effects: list[Effect],
+    env_mutation_nodes: list[ast.AST],
+    filename: str,
+) -> None:
     for env_node in env_mutation_nodes:
         effects.append(
             _effect(
@@ -1997,7 +2054,13 @@ def _analyze_func_node(
             )
         )
 
-    # Descriptor method: if the function is a descriptor method in a descriptor class
+
+def _append_descriptor_effect(
+    effects: list[Effect],
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+    filename: str,
+    is_descriptor_class: bool,
+) -> None:
     if func_node.name in _DESCRIPTOR_METHODS and is_descriptor_class:
         effects.append(
             _effect(
@@ -2008,7 +2071,13 @@ def _analyze_func_node(
             )
         )
 
-    # Resource management: __enter__/__exit__ or @contextmanager
+
+def _append_resource_effects(
+    effects: list[Effect],
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+    filename: str,
+    is_resource_mgmt: bool,
+) -> None:
     if func_node.name in _RESOURCE_MGMT_METHODS and is_resource_mgmt:
         effects.append(
             _effect(
@@ -2027,19 +2096,6 @@ def _analyze_func_node(
                 func_node,
             )
         )
-
-    # sentinel effects: attached to first function record or omitted if no functions.
-
-    # Sort effects by (line, col, type)
-    effects.sort(key=_effect_sort_key)
-
-    return FunctionRecord(
-        name=func_node.name,
-        package="",  # filled by caller
-        file=filename,
-        line=func_node.lineno,
-        side_effects=tuple(effects),
-    )
 
 
 # ---------------------------------------------------------------------------
