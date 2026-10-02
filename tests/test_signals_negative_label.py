@@ -13,7 +13,7 @@ import ast
 from pathlib import Path
 
 SIGNALS_DIR = Path(__file__).resolve().parents[1] / "src" / "snake_eyes" / "signals"
-FORBIDDEN = ("contractual", "incidental", "ambiguous")
+FORBIDDEN = ("contractual", "incidental", "ambiguous", "unclaimed")
 
 
 def test_signals_package_has_no_classification_labels() -> None:

@@ -103,19 +103,20 @@ snake-eyes/
 │   ├── signals/
 │   │   ├── __init__.py
 │   │   ├── _routing.py      # effect-type → category routing (reconstructed from gaze-py)
-│   │   ├── _types.py        # SignalResult value type
+│   │   ├── _types.py        # SignalResult + FunctionSurface/EnclosingClassVisibility enums
 │   │   ├── interface.py     # interface source extractor (reconstructed from gaze-py)
-│   │   ├── visibility.py    # visibility source extractor (reconstructed from gaze-py)
+│   │   ├── visibility.py    # surface-aware visibility source extractor
 │   │   ├── caller.py        # caller_count source extractor (reconstructed from gaze-py)
 │   │   ├── naming.py        # naming_convention source extractor (reconstructed from gaze-py)
 │   │   ├── docstring.py     # docstring source extractor (reconstructed from gaze-py)
-│   │   └── adapter.py       # extract_signals fan-out (classify_signals method)
+│   │   └── adapter.py       # extract_signals fan-out + function surface computation
 │   └── quality/
 │       ├── __init__.py      # re-exports run_test_mapping
 │       ├── pairing.py       # test-function pairing (3 strategies, lifted from gaze-py)
 │       ├── assertions.py    # assertion detection & classification (lifted from gaze-py)
 │       ├── mapping.py       # side-effect-type inference (test_mapping method)
 │       └── pipeline.py      # run_test_mapping orchestration (test_mapping method)
+├── docs/                    # effect-disposition.md (surface × visibility disposition table)
 ├── tests/
 ├── .github/workflows/       # CI: ruff, mypy, pytest gates
 ├── pyproject.toml
@@ -127,6 +128,7 @@ snake-eyes/
 Delivered in issue #4: `detector.py`, `complexity.py`, `coverage.py`, `_shared.py`, and the `analyze`, `complexity`, and `coverage` JSON-RPC methods.
 Delivered in issue #5: the `signals/` extractors, `analysis/inference.py` (astroid caller-count inference), and the `classify_signals` JSON-RPC method.
 Delivered in issue #6: the `quality/` package (`pairing.py`, `assertions.py`, `mapping.py`, `pipeline.py`), and the `test_mapping` JSON-RPC method.
+Delivered in issue #33: surface-aware `visibility` extraction (function surface + enclosing-class visibility) and the `docs/effect-disposition.md` disposition table.
 
 ## Shell Commands
 
@@ -150,12 +152,16 @@ uv run mypy src/
 # Run tests with coverage (85% is the protected gate)
 uv run pytest --cov=snake_eyes --cov-report=term-missing --cov-fail-under=85
 
+# Per-module coverage gate for surface-aware signals (95%)
+uv run coverage report --include='src/snake_eyes/signals/visibility.py,src/snake_eyes/signals/adapter.py' --fail-under=95
+
 # Run snake-eyes in stdio mode (for testing with gaze)
 uv run snake-eyes --stdio
 ```
 
 **Protected gates** (agents MUST NOT lower these):
 - `--cov-fail-under=85` -- minimum coverage percentage
+- `--fail-under=95` (per-module) -- `signals/visibility.py` and `signals/adapter.py` combined statement+branch coverage
 - `ruff format --check` -- formatting must pass, not auto-fix
 - `uv sync --locked` -- lockfile integrity
 

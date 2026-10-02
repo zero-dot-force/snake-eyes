@@ -96,19 +96,20 @@ snake-eyes/
 │   ├── signals/
 │   │   ├── __init__.py
 │   │   ├── interface.py     # interface source extractor (reconstructed from gaze-py)
-│   │   ├── visibility.py    # visibility source extractor (reconstructed from gaze-py)
+│   │   ├── visibility.py    # surface-aware visibility source extractor
 │   │   ├── caller.py        # caller_count source extractor (reconstructed from gaze-py)
 │   │   ├── naming.py        # naming_convention source extractor (reconstructed from gaze-py)
 │   │   ├── docstring.py     # docstring source extractor (reconstructed from gaze-py)
 │   │   ├── _routing.py      # effect-type → category routing (reconstructed from gaze-py)
-│   │   ├── _types.py        # SignalResult value type
-│   │   └── adapter.py       # extract_signals fan-out (classify_signals method)
+│   │   ├── _types.py        # SignalResult + FunctionSurface/EnclosingClassVisibility enums
+│   │   └── adapter.py       # extract_signals fan-out + function surface computation
 │   └── quality/
 │       ├── __init__.py      # re-exports run_test_mapping
 │       ├── pairing.py       # test-function pairing (3 strategies, lifted from gaze-py)
 │       ├── assertions.py    # assertion detection & classification (lifted from gaze-py)
 │       ├── mapping.py       # side-effect-type inference (test_mapping method)
 │       └── pipeline.py      # run_test_mapping orchestration (test_mapping method)
+├── docs/               # effect-disposition.md (surface × visibility disposition table)
 ├── tests/
 ├── pyproject.toml
 └── NOTICE
@@ -120,6 +121,8 @@ Delivered in issue #5: the `signals/` extractors, `analysis/inference.py`
 (astroid caller-count inference), and the `classify_signals` JSON-RPC method.
 Delivered in issue #6: the `quality/` package (`pairing.py`, `assertions.py`,
 `mapping.py`, `pipeline.py`), and the `test_mapping` JSON-RPC method.
+Delivered in issue #33: surface-aware `visibility` extraction (function surface
++ enclosing-class visibility) and the `docs/effect-disposition.md` disposition table.
 
 ## Limits & Troubleshooting
 

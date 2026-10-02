@@ -9,6 +9,7 @@ so the extractors stay free of protocol-shape concerns.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 
 @dataclass(frozen=True)
@@ -22,3 +23,19 @@ class SignalResult:
 
     weight: int
     reasoning: str
+
+
+class FunctionSurface(StrEnum):
+    """Where a function is defined."""
+
+    MODULE = "module"
+    METHOD = "method"
+    NESTED = "nested"
+
+
+class EnclosingClassVisibility(StrEnum):
+    """Visibility of a method's enclosing class."""
+
+    NONE = "none"
+    PUBLIC = "public"
+    PRIVATE = "private"

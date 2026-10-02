@@ -35,3 +35,8 @@ jobs:
       - run: uv run ruff format --check src/ tests/
       - run: uv run mypy src/
       - run: uv run pytest --cov=snake_eyes --cov-report=term-missing --cov-fail-under=85
+      - run: |
+          set -o pipefail
+          uv run coverage report --include='src/snake_eyes/signals/visibility.py,src/snake_eyes/signals/adapter.py' --fail-under=95 --show-missing | tee /tmp/per-module-cov.txt
+          grep -q 'signals/visibility.py' /tmp/per-module-cov.txt
+          grep -q 'signals/adapter.py' /tmp/per-module-cov.txt

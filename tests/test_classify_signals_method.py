@@ -103,3 +103,29 @@ def test_output_is_deterministic_across_hash_seeds(tmp_path: Path) -> None:
         return result.stdout
 
     assert _subprocess_run("0") == _subprocess_run("1")
+
+
+def test_surface_aware_visibility_at_boundary(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text(
+        "class Worker:\n"
+        "    def __init__(self):\n"
+        "        self.x = 1\n"
+        "def outer():\n"
+        "    def helper():\n"
+        "        return 1\n"
+        "    return helper()\n"
+    )
+    resp = responses(_run(req("classify_signals", root_path=str(tmp_path)) + "\n"))[0]
+    signals = resp["result"]["signals"]
+    init_vis = [
+        s
+        for s in signals
+        if s["function"] == "__init__" and s["source"] == "visibility"
+    ]
+    assert init_vis, "expected a visibility signal for the public-class __init__"
+    assert {s["weight"] for s in init_vis} == {10}
+    helper_vis = [
+        s for s in signals if s["function"] == "helper" and s["source"] == "visibility"
+    ]
+    assert helper_vis, "expected a visibility signal for the nested helper"
+    assert {s["weight"] for s in helper_vis} == {-10}
