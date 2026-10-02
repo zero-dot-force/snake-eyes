@@ -18,7 +18,7 @@ from ..analysis.detector import analyze_path
 from ..analysis.inference import build_caller_index
 from ..analysis.models import FunctionRecord
 from . import caller, docstring, interface, naming, visibility
-from ._types import SignalResult
+from ._types import EnclosingClassVisibility, FunctionSurface, SignalResult
 
 __all__ = ["extract_signals"]
 
@@ -37,6 +37,10 @@ class _FileContext:
     exported: set[str] = field(default_factory=set)
     class_bases_by_line: dict[int, tuple[str, ...]] = field(default_factory=dict)
     docstring_by_line: dict[int, str | None] = field(default_factory=dict)
+    surface_by_line: dict[int, FunctionSurface] = field(default_factory=dict)
+    enclosing_class_visibility_by_line: dict[int, EnclosingClassVisibility] = field(
+        default_factory=dict
+    )
 
 
 _EMPTY_CTX = _FileContext()
@@ -66,7 +70,13 @@ def extract_signals(
         ctx = file_ctx.get(record.file, _EMPTY_CTX)
         class_bases = ctx.class_bases_by_line.get(record.line)
         func_doc = ctx.docstring_by_line.get(record.line)
-        in_all = record.name in ctx.exported
+        surface = ctx.surface_by_line.get(record.line, FunctionSurface.MODULE)
+        enclosing_class_visibility = ctx.enclosing_class_visibility_by_line.get(
+            record.line, EnclosingClassVisibility.NONE
+        )
+        in_all = (
+            record.name in ctx.exported if surface is FunctionSurface.MODULE else False
+        )
         caller_count = index.count(record.package, record.name)
         for effect in record.side_effects:
             et = effect.type
@@ -76,7 +86,9 @@ def extract_signals(
                 record,
                 et,
                 _VISIBILITY,
-                visibility.extract(record.name, in_all),
+                visibility.extract(
+                    record.name, in_all, surface, enclosing_class_visibility, et
+                ),
             )
             _emit(signals, record, et, _CALLER_COUNT, caller.extract(caller_count))
             _emit(signals, record, et, _NAMING, naming.extract(record.name, et))
@@ -126,17 +138,31 @@ def _collect_file_context(
 
         class_bases_by_line: dict[int, tuple[str, ...]] = {}
         docstring_by_line: dict[int, str | None] = {}
+        surface_by_line: dict[int, FunctionSurface] = {}
+        enclosing_class_visibility_by_line: dict[int, EnclosingClassVisibility] = {}
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 docstring_by_line[node.lineno] = ast.get_docstring(node)
-                enclosing = _enclosing_class(node, parents)
-                if enclosing is not None:
-                    class_bases_by_line[node.lineno] = _class_base_names(enclosing)
+                surface = _function_surface(node, parents)
+                surface_by_line[node.lineno] = surface
+                if surface is FunctionSurface.METHOD:
+                    enclosing = _enclosing_class(node, parents)
+                    if enclosing is not None:
+                        class_bases_by_line[node.lineno] = _class_base_names(enclosing)
+                        enclosing_class_visibility_by_line[node.lineno] = (
+                            _enclosing_class_visibility(enclosing, parents)
+                        )
+                else:
+                    enclosing_class_visibility_by_line[node.lineno] = (
+                        EnclosingClassVisibility.NONE
+                    )
 
         ctx_by_file[rel_path] = _FileContext(
             exported=_extract_all(tree),
             class_bases_by_line=class_bases_by_line,
             docstring_by_line=docstring_by_line,
+            surface_by_line=surface_by_line,
+            enclosing_class_visibility_by_line=enclosing_class_visibility_by_line,
         )
     return ctx_by_file
 
@@ -144,7 +170,8 @@ def _collect_file_context(
 def _enclosing_class(
     node: ast.AST, parents: dict[ast.AST, ast.AST]
 ) -> ast.ClassDef | None:
-    """Nearest enclosing class, or ``None`` if ``node`` is a nested function."""
+    """Nearest enclosing class, or ``None`` if ``node`` is a nested or module-level
+    function."""
     cur = parents.get(node)
     while cur is not None:
         if isinstance(cur, ast.ClassDef):
@@ -153,6 +180,40 @@ def _enclosing_class(
             return None
         cur = parents.get(cur)
     return None
+
+
+def _function_surface(
+    node: ast.AST, parents: dict[ast.AST, ast.AST]
+) -> FunctionSurface:
+    """Classify where ``node`` is defined by its nearest scope boundary."""
+    cur = parents.get(node)
+    while cur is not None:
+        if isinstance(cur, ast.ClassDef):
+            return FunctionSurface.METHOD
+        if isinstance(cur, ast.FunctionDef | ast.AsyncFunctionDef):
+            return FunctionSurface.NESTED
+        if isinstance(cur, ast.Module):
+            return FunctionSurface.MODULE
+        cur = parents.get(cur)
+    # Defensive fallback: only reachable with a missing/empty ``parents`` map.
+    return FunctionSurface.MODULE
+
+
+def _enclosing_class_visibility(
+    classdef: ast.ClassDef, parents: dict[ast.AST, ast.AST]
+) -> EnclosingClassVisibility:
+    """Visibility of ``classdef``: private by name or by function nesting."""
+    if classdef.name.startswith("_"):
+        return EnclosingClassVisibility.PRIVATE
+    cur = parents.get(classdef)
+    while cur is not None:
+        if isinstance(cur, ast.FunctionDef | ast.AsyncFunctionDef):
+            return EnclosingClassVisibility.PRIVATE
+        if isinstance(cur, ast.Module):
+            return EnclosingClassVisibility.PUBLIC
+        cur = parents.get(cur)
+    # Defensive fallback: only reachable with a missing/empty ``parents`` map.
+    return EnclosingClassVisibility.PUBLIC
 
 
 def _class_base_names(classdef: ast.ClassDef) -> tuple[str, ...]:
