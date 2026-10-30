@@ -218,6 +218,10 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Machine-local config (never commit)
+.opencode/opencode.json
+.uf/review-matrix.override.yaml
+
 # Unbound Force — managed by uf init
 # Runtime data under .uf/ (databases, caches, locks, logs)
 .uf/workflows/
