@@ -14,7 +14,6 @@ tools:
   webfetch: false
 ---
 <!-- scaffolded by gaze dev -->
-<!-- scaffolded by gaze v1.8.0 -->
 
 # Role: Test Generator
 
@@ -212,7 +211,7 @@ If no existing tests exist, use these defaults:
 ## Quality Criteria
 
 Generated tests MUST satisfy these criteria (derived from the
-reviewer-testing agent rubric):
+divisor-gaze-testing agent rubric):
 
 ### Assertion Depth
 

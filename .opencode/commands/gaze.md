@@ -7,7 +7,6 @@ description: >
 agent: gaze-reporter
 ---
 <!-- scaffolded by gaze dev -->
-<!-- scaffolded by gaze v1.8.0 -->
 
 <protect>
 # Command: /gaze
@@ -16,7 +15,7 @@ agent: gaze-reporter
 
 Run Gaze quality analysis and produce a human-readable report.
 Delegates to the `gaze-reporter` agent which runs the appropriate
-`gaze` CLI commands and interprets the JSON output.
+`gaze` CLI commands, shows the Gaze-rendered report, and adds judgment.
 
 ## Usage
 
