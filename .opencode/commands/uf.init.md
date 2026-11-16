@@ -25,6 +25,20 @@ or after updating the OpenSpec CLI (`npm update`). Safe to re-run
 
 <protect>
 
+### Step 0a: Protect Block Idempotency Check
+
+Before modifying this file, check if a `<protect>` tag already exists
+between the `## Instructions` heading and the `### Step 0` heading:
+
+1. **Read** this file's content
+2. **Check** if `<protect>` appears between `## Instructions` and
+   `### Step 0`
+3. **If present**: Report `⊘ uf.init.md: protect block already present
+   (skipped)` and skip the protection insertion steps
+4. **If not present**: Proceed with the protection insertion (the
+   `<protect>` and `</protect>` tags are already in place from the
+   source template -- this check ensures idempotency when re-running)
+
 ### Step 0: Command Directory Migration
 
 Check whether the legacy `.opencode/command/` directory needs
@@ -108,7 +122,12 @@ idempotency checks -- presence of one variant MUST NOT cause
 other variants to be skipped. For each file:
 
 1. **Read** the file content
-2. **Check** each applicable variant independently:
+2. **Check for `<protect>` block**: If the file contains a
+   `<protect>` block, all insertions for this file MUST be placed
+   inside the `<protect>` block (between `<protect>` and
+   `</protect>` tags). If no `<protect>` block exists, use the
+   insertion locations specified below.
+3. **Check** each applicable variant independently:
    - **Basic branch check**: Look for `opsx/<name>`,
      `opsx/<change-name>`, or `git checkout -b opsx/`
    - **Dirty tree check** (propose only): Look for
@@ -297,7 +316,12 @@ For each target file listed below, apply Dewey context query
 instructions. For each file:
 
 1. **Read** the file content
-2. **Check** if Dewey context is already present. Look for
+2. **Check for `<protect>` block**: If the file contains a
+   `<protect>` block, the insertion MUST be placed inside the
+   `<protect>` block (between `<protect>` and `</protect>` tags).
+   If no `<protect>` block exists, use the insertion location
+   specified below.
+3. **Check** if Dewey context is already present. Look for
    `dewey_semantic_search` or `dewey_search` as **tool
    invocation references** (not in prose descriptions or
    comments). The word "Dewey" alone in a sentence is NOT
@@ -408,7 +432,12 @@ For each target skill file listed below, apply the 3-tier
 degradation pattern. For each file:
 
 1. **Read** the file content
-2. **Check** if the degradation pattern is already present. Look
+2. **Check for `<protect>` block**: If the file contains a
+   `<protect>` block, the insertion MUST be placed inside the
+   `<protect>` block (between `<protect>` and `</protect>` tags).
+   If no `<protect>` block exists, use the insertion location
+   specified below.
+3. **Check** if the degradation pattern is already present. Look
    for mentions of "Tier 1", "Tier 2", "Tier 3", "graceful
    degradation", "graph-only", or a structured fallback pattern
    involving Dewey availability.
@@ -482,6 +511,27 @@ description: Perform a non-destructive cross-artifact consistency and quality an
 ---
 ```
 
+After the title heading (`# Command: /speckit.analyze`) and
+before the `## Guardrails` section, wrap the core instruction
+body in a `<protect>` block:
+
+```markdown
+# Command: /speckit.analyze
+
+...
+
+<protect>
+
+## Instructions
+
+... (workflow steps) ...
+
+</protect>
+
+## Guardrails
+...
+```
+
 #### speckit.checklist.md
 
 Create `.opencode/commands/speckit.checklist.md` — a
@@ -501,6 +551,27 @@ Use this frontmatter:
 ---
 description: Generate a custom checklist for the current feature based on user requirements.
 ---
+```
+
+After the title heading (`# Command: /speckit.checklist`) and
+before the `## Guardrails` section, wrap the core instruction
+body in a `<protect>` block:
+
+```markdown
+# Command: /speckit.checklist
+
+...
+
+<protect>
+
+## Instructions
+
+... (workflow steps) ...
+
+</protect>
+
+## Guardrails
+...
 ```
 
 #### speckit.clarify.md
@@ -523,6 +594,27 @@ description: Identify underspecified areas in the current feature spec by asking
 ---
 ```
 
+After the title heading (`# Command: /speckit.clarify`) and
+before the `## Guardrails` section, wrap the core instruction
+body in a `<protect>` block:
+
+```markdown
+# Command: /speckit.clarify
+
+...
+
+<protect>
+
+## Instructions
+
+... (workflow steps) ...
+
+</protect>
+
+## Guardrails
+...
+```
+
 #### speckit.taskstoissues.md
 
 Create `.opencode/commands/speckit.taskstoissues.md` — a
@@ -539,6 +631,27 @@ Use this frontmatter:
 description: Convert existing tasks into actionable, dependency-ordered GitHub issues for the feature based on available design artifacts.
 tools: ['github/github-mcp-server/issue_write']
 ---
+```
+
+After the title heading (`# Command: /speckit.taskstoissues`) and
+before the `## Guardrails` section, wrap the core instruction
+body in a `<protect>` block:
+
+```markdown
+# Command: /speckit.taskstoissues
+
+...
+
+<protect>
+
+## Instructions
+
+... (workflow steps) ...
+
+</protect>
+
+## Guardrails
+...
 ```
 
 All 4 commands MUST include the standard initialization
@@ -572,37 +685,49 @@ guardrails — creates GitHub issues via MCP API)
 For each file:
 
 1. **Read** the file content
-2. **Check** if a `## Guardrails` section already exists
+2. **Check for `<protect>` block**: If the file contains a
+   `<protect>` block, the `## Guardrails` section MUST be placed
+   inside the `<protect>` block (between `<protect>` and
+   `</protect>` tags). If no `<protect>` block exists, append
+   the guardrails at the end of the file as specified below.
+3. **Check** if a `## Guardrails` section already exists
    (search for the heading text `## Guardrails` as a
    markdown heading outside of fenced code blocks)
 3. **If NOT present**: Append the appropriate guardrails
    variant at the very end of the file. Report
    `✅ <filename>: guardrails injected`
 4. **If already present — spec-phase commands**: Perform
-   a secondary check — search for the phrase "review
-   defeats the purpose". If the Guardrails heading exists
-   but the review-rationale sentence is missing, append
-   the sentence to the existing Guardrails section.
-   Report `✅ <filename>: review-rationale added`.
-   If the sentence is already present, report
+   a secondary check — search for BOTH the phrase "review
+   defeats the purpose" AND the UF-reference markers
+   `dewey_semantic_search` and
+   `.specify/memory/constitution.md`. If the Guardrails
+   heading exists but ANY of these markers is missing,
+   the block is stale (pre-reconciliation): replace the
+   entire `## Guardrails` section (from the heading to the
+   next `##` heading or end of file) with the current
+   Spec-phase guardrails block below.
+   Report `✅ <filename>: guardrails corrected`.
+   If ALL markers are already present, report
    `⊘ <filename>: guardrails already present (skipped)`
 5. **If already present — command-specific commands**
    (`implement`, `constitution`, `taskstoissues`):
-   Check for the command's correctness marker:
+   Check for ALL of the command's correctness markers.
+   A block is correct only when EVERY marker is present:
 
-   | Command | Correctness marker |
-   |---------|-------------------|
-   | `speckit.implement.md` | "writes source code" |
-   | `speckit.constitution.md` | ".specify/memory/" |
+   | Command | Correctness markers |
+   |---------|--------------------|
+   | `speckit.implement.md` | "writes source code" AND `dewey_semantic_search` AND `.specify/memory/constitution.md` AND `/uf.review-council` |
+   | `speckit.constitution.md` | ".specify/memory/" AND `dewey_semantic_search` AND `.specify/memory/constitution.md` |
    | `speckit.taskstoissues.md` | "GitHub issues via" |
 
-   If the correctness marker IS present in the existing
+   If EVERY correctness marker IS present in the existing
    `## Guardrails` section, the guardrails are correct.
    Report
    `⊘ <filename>: guardrails already present (skipped)`
 
-   If the correctness marker is ABSENT, the guardrails
-   are incorrect (likely the old shared template).
+   If ANY correctness marker is ABSENT, the guardrails
+   are incorrect (likely the old shared template or a
+   pre-reconciliation block missing the UF references).
    Replace the entire `## Guardrails` section (from the
    heading to the next `##` heading or end of file) with
    the command-specific guardrail block. Report
@@ -616,7 +741,7 @@ For each file:
 
 - **NEVER modify source code** — this command updates
   spec artifacts ONLY. Implementation changes belong in
-  `/speckit.implement`, `/unleash`, or `/cobalt-crush`.
+  `/speckit.implement`, `/uf.unleash`, or `/uf.cobalt-crush`.
 - **NEVER modify test files, Go source, Markdown agents,
   convention packs, or config files** outside the
   `specs/NNN-*/` feature directory.
@@ -628,6 +753,10 @@ For each file:
 - The user needs to review the plan before
   implementation begins. Implementing without review
   defeats the purpose of the spec-first workflow.
+- Consult the project constitution
+  (`.specify/memory/constitution.md`) and retrieve prior
+  context via Dewey (`dewey_semantic_search`) before
+  writing spec artifacts.
 ```
 
 **Implement guardrails block** (`speckit.implement.md`):
@@ -643,6 +772,12 @@ For each file:
   implementation plan. Do not make changes unrelated to
   the current task group.
 - Mark task checkboxes `[x]` as each task is completed.
+- Consult the project constitution
+  (`.specify/memory/constitution.md`) and retrieve prior
+  context via Dewey (`dewey_semantic_search`) before
+  writing code.
+- Run `/uf.review-council` before completing
+  implementation.
 ```
 
 **Constitution guardrails block** (`speckit.constitution.md`):
@@ -659,6 +794,10 @@ For each file:
     propagation)
 - Do NOT modify source code, test files, or any files
   outside the `.specify/` directory.
+- Consult the project constitution
+  (`.specify/memory/constitution.md`) and retrieve prior
+  context via Dewey (`dewey_semantic_search`) before
+  amending governance documents.
 ```
 
 **Taskstoissues guardrails block** (`speckit.taskstoissues.md`):
@@ -672,6 +811,15 @@ For each file:
 - Issues MUST only be created in the repository matching
   the current Git remote. NEVER create issues in
   unrelated repositories.
+- **Content portability**: Issue titles and bodies MUST
+  use language that matches the target repository's
+  language and project type. Read README.md or AGENTS.md
+  to determine the project type. MUST NOT reference
+  tools or concepts specific to a different repository
+  type (e.g., "organization-configuration repository",
+  "Peribolos", "safe-settings") unless the target
+  repository actually uses them. See convention pack
+  rules CP-001 through CP-003.
 - Do NOT modify source code, spec artifacts, or any
   local files.
 ```
@@ -710,13 +858,19 @@ This step is read-only — it verifies but does not modify.
 For `.opencode/commands/opsx-propose.md`:
 
 1. **Read** the file content
-2. **Check** if a `## Guardrails` section exists at the
+2. **Check for `<protect>` block**: If the file contains a
+   `<protect>` block, the `## Guardrails` section MUST be placed
+   inside the `<protect>` block (between `<protect>` and
+   `</protect>` tags). If no `<protect>` block exists, append
+   the guardrails at the end of the file as specified below.
+3. **Check** if a `## Guardrails` section exists at the
    end of the file (search for the heading text
    `## Guardrails`)
-3. **If already present**: Report
+4. **If already present**: Report
    `⊘ opsx-propose.md: guardrails already present (skipped)`
-4. **If not present**: Append the following block at the
-   very end of the file. Report
+5. **If not present**: Append the following block at the
+   very end of the file (or inside the `<protect>` block if
+   one exists). Report
    `✅ opsx-propose.md: guardrails injected`
 
 The guardrails block to append:
@@ -820,11 +974,16 @@ prompt the user.
 For each target file:
 
 1. **Read** the file content
-2. **Check** if "STOP HERE" (case-sensitive) is already
+2. **Check for `<protect>` block**: If the file contains a
+   `<protect>` block, the STOP HERE block MUST be placed
+   inside the `<protect>` block (between `<protect>` and
+   `</protect>` tags). If no `<protect>` block exists, use
+   the insertion location specified below.
+3. **Check** if "STOP HERE" (case-sensitive) is already
    present in the file
-3. **If already present**: Report
+4. **If already present**: Report
    `⊘ <filename>: STOP HERE already present (skipped)`
-4. **If not present**: Insert the STOP HERE block. Report
+5. **If not present**: Insert the STOP HERE block. Report
    `✅ <filename>: STOP HERE inserted`
 
 **What to insert**:
@@ -835,7 +994,7 @@ For each target file:
 
 Your job is done. Report the results and prompt the
 user. The user will invoke a separate command
-(`/speckit.implement`, `/unleash`, or `/cobalt-crush`)
+(`/speckit.implement`, `/uf.unleash`, or `/uf.cobalt-crush`)
 when they are ready to implement.
 ```
 
@@ -848,11 +1007,11 @@ file.
 ### Step 11: Scaffold Comment Deduplication
 
 Deduplicate scaffold comments in all files processed by
-`/uf-init`. Repeated runs of `uf init` across versions
+`/uf.init`. Repeated runs of `uf init` across versions
 can accumulate multiple `<!-- scaffolded by uf ... -->`
 comments in the same file.
 
-**Target scope**: All files processed by `/uf-init`:
+**Target scope**: All files processed by `/uf.init`:
 - The 4 OpenSpec skill files (Step 2-4 targets)
 - The 3 OpenSpec command files (Step 2-3 targets)
 - The 9 speckit command files (Step 5-6 targets)
@@ -913,6 +1072,8 @@ the migration was effective:
    directory after migration -- check Step 0 output`
 3. **If not found**: Report
    `⊘ command/: migration verified (or not needed)`
+
+</protect>
 
 ### Post-Write Verification
 
@@ -978,5 +1139,3 @@ Re-run `/uf.init` after:
    or on Fedora/RHEL: `sudo dnf upgrade unbound-force`
    — new versions may add scaffold files that need
    customization)
-
-</protect>
