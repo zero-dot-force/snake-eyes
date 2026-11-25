@@ -50,7 +50,7 @@ concurrency:
 jobs:
   release:
     name: Release
-    uses: jflowers/ship/.github/workflows/tag-release.yml@74ed8075d5c25389bf4d2b775fa52214bed8d5b7 # v0.7.0
+    uses: jflowers/ship/.github/workflows/tag-release.yml@7c6c0e199099d732e0db93c8c9d86b0064c2759c # v0.9.0
     with:
       tag: ${{ inputs.tag }}
       ci_checks: '["test (3.11)", "test (3.12)"]'
