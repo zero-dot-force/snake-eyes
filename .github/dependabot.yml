@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    # No PR for a third-party release younger than a day (org-infra's
+    # release-age check); our own orgs' releases come at once and merge
+    # themselves (dependabot-automerge.yml).
+    cooldown:
+      default-days: 1
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      deps:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 1
+      exclude: ["jflowers/*", "unbound-force/*", "zero-dot-force/*"]
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      # ship's workflows first, in their own PR, so a ship release isn't
+      # held up by a third-party update in the same group.
+      ship:
+        patterns: ["jflowers/ship*"]
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
