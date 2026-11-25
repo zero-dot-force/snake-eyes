@@ -1,11 +1,20 @@
-# This workflow publishes snake-eyes to PyPI on manual dispatch.
-# It runs the org-infra release preflight (semver validation, CI
-# check-run verification, and annotated tag creation), then builds
-# the sdist and wheel, publishes them to PyPI via trusted publishing
-# (OIDC), generates an SPDX SBOM, and attaches all artifacts to a
-# GitHub Release. Trusted publishing (task 4.3) and the protected
-# `release` environment (task 4.2) must be configured org-side before
-# the first dispatch.
+# Publishes snake-eyes to PyPI. Run from main with the tag (don't push
+# tags yourself):
+#
+#   gh workflow run release.yml -f tag=v0.2.0
+#
+# The front half is jflowers/ship's shared tag-release.yml: the run must be
+# on main; org-infra's preflight checks the tag (semver, new, newer than the
+# last), that the CI checks below passed on HEAD and that there are
+# unreleased commits, then creates the tag; the GitHub release is created
+# with generated notes. The publish job below then checks out the tag,
+# builds the sdist and wheel, publishes them to PyPI through trusted
+# publishing (OIDC) in the protected `release` environment, generates an
+# SPDX SBOM, and uploads all of them to the release.
+#
+# PyPI's trusted publisher names this repository, this file (release.yml)
+# and the `release` environment, so the publish step stays in this job: it
+# can't move into a shared workflow without re-registering the publisher.
 
 name: release
 
@@ -32,13 +41,16 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  preflight:
-    name: Preflight
-    uses: complytime/org-infra/.github/workflows/reusable_release_preflight.yml@0c784711926c9864f027ec565fd7c06a382d80f8 # v0.7.1
+  release:
+    name: Release
+    uses: jflowers/ship/.github/workflows/tag-release.yml@74ed8075d5c25389bf4d2b775fa52214bed8d5b7 # v0.7.0
     with:
       tag: ${{ inputs.tag }}
       ci_checks: '["test (3.11)", "test (3.12)"]'
@@ -52,20 +64,23 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: preflight
-    if: needs.preflight.outputs.tag != ''
+    needs: release
+    if: needs.release.outputs.tag != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment:
       name: release
       url: https://pypi.org/p/snake-eyes-analyzer
     permissions:
-      contents: write
-      id-token: write
+      contents: write # uploads to the release
+      id-token: write # trusted publishing
+    env:
+      TAG: ${{ needs.release.outputs.tag }}
     steps:
       - name: Check out the release tag
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.preflight.outputs.tag }}
+          ref: refs/tags/${{ needs.release.outputs.tag }}
           persist-credentials: false
 
       - name: Set up uv
@@ -84,10 +99,7 @@ jobs:
           format: spdx-json
           output-file: sbom.spdx.json
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          files: |
-            dist/*
-            sbom.spdx.json
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/* sbom.spdx.json --repo "$GITHUB_REPOSITORY" --clobber
