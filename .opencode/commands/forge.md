@@ -28,7 +28,13 @@ $ARGUMENTS
    - Before decomposing, check historical success rates: `forge_get_strategy_insights(task="<task>")`
    - Choose from: `file-based`, `feature-based`, `risk-based`, or `auto`
 4. Create epic: `org_create_epic(epic_title="<task>", subtasks=[...])`
-5. For each subtask: `forge_spawn_subtask(bead_id, epic_id, subtask_title, files)`
+5. For each subtask: `forge_spawn_subtask(bead_id, epic_id, subtask_title, files, task_classification, skill | skill_absent_reason)`
+   - `task_classification` is required: `deterministic` or `judgment`
+   - `deterministic` subtasks require a `skill` reference (verified skill name or repo-relative script path) OR a `skill_absent_reason` — never both
+   - `judgment` subtasks must omit both `skill` and `skill_absent_reason` — supplying either fails input validation
+   - Unverifiable references fail closed (`SKILL_NOT_FOUND`); missing both fails with `SKILL_REFERENCE_REQUIRED`
+   - Pass `project_path` when spawning against a repo other than the current directory
+   - Forward the envelope's `skill_directive` verbatim into the worker prompt (or pass the same `skill` to `forge_subtask_prompt`); never write skill instructions yourself
 6. Monitor: check `comms_inbox()` every few minutes
    - `comms_inbox()` — check for messages from workers
    - `forge_status(epic_id, project_key)` — check worker progress

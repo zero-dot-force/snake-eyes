@@ -21,7 +21,10 @@ Patterns for coordinating parallel agent work.
 3. **Select strategy**: `forge_get_strategy_insights(task="<task>")`
 4. **Decompose**: `forge_decompose(task="<task>", context="<learnings>")`
 5. **Create epic**: `org_create_epic(epic_title="<task>", subtasks=[...])`
-6. **Spawn workers**: `forge_spawn_subtask(bead_id, epic_id, subtask_title, files)`
+6. **Spawn workers**: `forge_spawn_subtask(bead_id, epic_id, subtask_title, files, task_classification, skill | skill_absent_reason)`
+   - `task_classification` is required (`deterministic` | `judgment`)
+   - `deterministic` subtasks must supply a verified `skill` reference or a `skill_absent_reason` (mutually exclusive); spawn fails closed with `SKILL_REFERENCE_REQUIRED` / `SKILL_NOT_FOUND`
+   - `judgment` subtasks must omit both `skill` and `skill_absent_reason`; forward the envelope's `skill_directive` verbatim (or pass the same `skill` to `forge_subtask_prompt`) — never write skill instructions yourself
 7. **Monitor**: `comms_inbox()` + `forge_status(epic_id, project_key)`
 8. **Review**: `forge_review(task_id, files_touched)` for each worker
 9. **Complete**: `forge_complete(bead_id, summary, files_touched)`
