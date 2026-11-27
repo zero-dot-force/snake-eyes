@@ -16,7 +16,16 @@ permissions:
   contents: read
 
 jobs:
+  # Learnings-only and toolkit-rollout PRs skip the test matrix; pushes and
+  # every other PR run it. See jflowers/ship's README, "pr-scope.yml".
+  scope:
+    uses: jflowers/ship/.github/workflows/pr-scope.yml@3b0ce8bf47183be402df9eaec16644c213eee5f7 # main, after v0.11.0
+    permissions:
+      contents: read
+
   test:
+    needs: scope
+    if: needs.scope.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -40,3 +49,25 @@ jobs:
           uv run coverage report --include='src/snake_eyes/signals/visibility.py,src/snake_eyes/signals/adapter.py' --fail-under=95 --show-missing | tee /tmp/per-module-cov.txt
           grep -q 'signals/visibility.py' /tmp/per-module-cov.txt
           grep -q 'signals/adapter.py' /tmp/per-module-cov.txt
+
+  # The one required check: a skipped matrix reports no per-leg checks, so
+  # this always runs and fails unless scope succeeded and the test matrix
+  # passed (code PRs) or was skipped (chore PRs).
+  ci-ok:
+    name: CI OK
+    needs: [scope, test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          SCOPE: ${{ needs.scope.result }}
+          CODE: ${{ needs.scope.outputs.code }}
+          TEST: ${{ needs.test.result }}
+        run: |
+          [ "$SCOPE" = success ] || { echo "::error::scope: $SCOPE"; exit 1; }
+          case "$CODE" in
+            true) [ "$TEST" = success ] || { echo "::error::test: $TEST"; exit 1; } ;;
+            false) [ "$TEST" = skipped ] || { echo "::error::test: $TEST"; exit 1; } ;;
+            *) echo "::error::scope code '$CODE'"; exit 1 ;;
+          esac
